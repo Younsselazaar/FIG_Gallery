@@ -1,0 +1,99 @@
+apply plugin: "com.android.application"
+apply plugin: "org.jetbrains.kotlin.android"
+apply plugin: "com.facebook.react"
+
+/**
+ * FIG Gallery Android app module
+ *
+ * Locked for:
+ * - React Native 0.73.x
+ * - Android 11-13 (minSdk 30)
+ * - Hermes ENABLED
+ * - New Architecture DISABLED
+ */
+
+react {
+    entryFile = file("../../src/index.js")
+}
+
+def enableProguardInReleaseBuilds = true
+
+android {
+    ndkVersion rootProject.ext.ndkVersion
+    buildToolsVersion rootProject.ext.buildToolsVersion
+    compileSdk rootProject.ext.compileSdkVersion
+
+    namespace "com.fig.gallery"
+
+    defaultConfig {
+        applicationId "com.fig.gallery"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 4
+        versionName "1.0.3"
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+        release {
+            storeFile file('C:/Users/PCYAZ/Documents/Fig_Projects/Fig-keys/platform.p12')
+            storePassword 'android'
+            keyAlias 'platform'
+            keyPassword 'android'
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+            shrinkResources false
+        }
+
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled enableProguardInReleaseBuilds
+            shrinkResources enableProguardInReleaseBuilds
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
+
+    packagingOptions {
+        resources {
+            excludes += [
+                "META-INF/*.kotlin_module",
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1"
+            ]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+}
+
+dependencies {
+    implementation("com.facebook.react:react-android")
+
+    if (hermesEnabled.toBoolean()) {
+        implementation("com.facebook.react:hermes-android")
+    } else {
+        implementation("org.webkit:android-jsc:+")
+    }
+}
+
+apply from: file("../../node_modules/@react-native-community/cli-platform-android/native_modules.gradle"); applyNativeModulesAppBuildGradle(project)

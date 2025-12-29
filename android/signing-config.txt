@@ -1,0 +1,18 @@
+FIG Gallery - Signing Configuration
+====================================
+
+Keystore File: C:\Users\PCYAZ\Documents\Fig_Projects\Fig-keys\platform.p12
+Keystore Password: android
+Key Alias: platform
+Key Password: android
+
+Usage in build.gradle:
+----------------------
+signingConfigs {
+    release {
+        storeFile file('C:/Users/PCYAZ/Documents/Fig_Projects/Fig-keys/platform.p12')
+        storePassword 'android'
+        keyAlias 'platform'
+        keyPassword 'android'
+    }
+}

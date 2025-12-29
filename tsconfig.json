@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    /* Language & Environment */
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "jsx": "react-native",
+
+    /* Modules */
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "allowJs": true,
+
+    /* Strictness (balanced for RN) */
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Interop */
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+
+    /* Paths */
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+
+    /* Output (no emit — Metro handles bundling) */
+    "noEmit": true
+  },
+  "exclude": [
+    "node_modules",
+    "android",
+    "ios"
+  ]
+}
