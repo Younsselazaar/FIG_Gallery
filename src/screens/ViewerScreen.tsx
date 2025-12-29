@@ -17,6 +17,8 @@ import {
   markFavorite,
   trashPhoto,
 } from "../db/photoRepository";
+import { trackPhotoView } from "../services/viewTracking";
+import AddToAlbumModal from "../components/AddToAlbumModal";
 
 import { dark, brand, ui, semantic } from "../theme/colors";
 import { spacing, radius } from "../theme/tokens";
@@ -124,6 +126,7 @@ export default function ViewerScreen() {
   const [allPhotos, setAllPhotos] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [addToAlbumVisible, setAddToAlbumVisible] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -136,6 +139,9 @@ export default function ViewerScreen() {
       return;
     }
     setPhoto(currentPhoto);
+
+    // Track this photo view for Recently Viewed and Most Viewed
+    await trackPhotoView(photoId);
 
     const photos = await getAllPhotos();
     setAllPhotos(photos);
@@ -165,19 +171,23 @@ export default function ViewerScreen() {
     }
   };
 
-  const goToPrevious = () => {
+  const goToPrevious = async () => {
     if (currentIndex > 0) {
       const prevPhoto = allPhotos[currentIndex - 1];
       setPhoto(prevPhoto);
       setCurrentIndex(currentIndex - 1);
+      // Track view for the new photo
+      await trackPhotoView(prevPhoto.id);
     }
   };
 
-  const goToNext = () => {
+  const goToNext = async () => {
     if (currentIndex < allPhotos.length - 1) {
       const nextPhoto = allPhotos[currentIndex + 1];
       setPhoto(nextPhoto);
       setCurrentIndex(currentIndex + 1);
+      // Track view for the new photo
+      await trackPhotoView(nextPhoto.id);
     }
   };
 
@@ -263,7 +273,7 @@ export default function ViewerScreen() {
           <Text style={styles.actionText}>Edit</Text>
         </Pressable>
 
-        <Pressable style={styles.actionButton}>
+        <Pressable style={styles.actionButton} onPress={() => setAddToAlbumVisible(true)}>
           <AddIcon size={scale(22)} />
           <Text style={styles.actionText}>Add to</Text>
         </Pressable>
@@ -279,31 +289,84 @@ export default function ViewerScreen() {
         <>
           <Pressable style={styles.menuOverlay} onPress={() => setMenuOpen(false)} />
           <View style={styles.menu}>
-            <Pressable style={styles.menuItem} onPress={handleShare}>
-              <ShareIcon size={scale(20)} color={dark.textPrimary} />
+            {/* Share */}
+            <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); handleShare(); }}>
+              <ShareIcon size={scale(20)} color="#1A1A1A" />
               <Text style={styles.menuItemText}>Share</Text>
             </Pressable>
+            {/* Edit */}
             <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); navigation.navigate("Editor", { photoId: photo.id }); }}>
-              <EditIcon size={scale(20)} color={dark.textPrimary} />
+              <EditIcon size={scale(20)} color="#1A1A1A" />
               <Text style={styles.menuItemText}>Edit</Text>
             </Pressable>
-            <Pressable style={styles.menuItem}>
-              <AddIcon size={scale(20)} color={dark.textPrimary} />
+            {/* Add to album */}
+            <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); setAddToAlbumVisible(true); }}>
+              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                <Path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zm-8-2h2v-4h4v-2h-4V7h-2v4H7v2h4v4z" fill="#1A1A1A" />
+              </Svg>
               <Text style={styles.menuItemText}>Add to album</Text>
             </Pressable>
+            {/* Archive */}
             <Pressable style={styles.menuItem}>
               <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
-                <Path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 18H4V4h16v16zM6 10h2v2H6v-2zm0 4h8v2H6v-2zm10 0h2v2h-2v-2zm-6-4h8v2h-8v-2z" fill={dark.textPrimary} />
+                <Path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.menuItemText}>Archive</Text>
+            </Pressable>
+            {/* Locked folder */}
+            <Pressable style={styles.menuItem}>
+              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                <Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.menuItemText}>Locked folder</Text>
+            </Pressable>
+            {/* Revert to original */}
+            <Pressable style={styles.menuItem}>
+              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                <Path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.menuItemText}>Revert to original</Text>
+            </Pressable>
+            {/* Details */}
+            <Pressable style={styles.menuItem}>
+              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                <Path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" fill="#1A1A1A" />
               </Svg>
               <Text style={styles.menuItemText}>Details</Text>
             </Pressable>
+            {/* Show EXIF */}
+            <Pressable style={styles.menuItem}>
+              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                <Path d="M9 3L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2h-3.17L15 3H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.65 0-3 1.35-3 3s1.35 3 3 3 3-1.35 3-3-1.35-3-3-3z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.menuItemText}>Show EXIF</Text>
+            </Pressable>
+            {/* Manage Tags */}
+            <Pressable style={styles.menuItem}>
+              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                <Path d="M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58.55 0 1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.menuItemText}>Manage Tags</Text>
+            </Pressable>
+            {/* Delete */}
             <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); handleDelete(); }}>
-              <DeleteIcon size={scale(20)} color={semantic.error} />
-              <Text style={[styles.menuItemText, { color: semantic.error }]}>Delete</Text>
+              <DeleteIcon size={scale(20)} color="#E53935" />
+              <Text style={[styles.menuItemText, { color: "#E53935" }]}>Delete</Text>
             </Pressable>
           </View>
         </>
       )}
+
+      {/* Add to Album Modal */}
+      <AddToAlbumModal
+        visible={addToAlbumVisible}
+        onClose={() => setAddToAlbumVisible(false)}
+        onSelectAlbum={(albumId, albumName) => {
+          console.log(`Adding photo to album: ${albumName}`);
+          // TODO: Implement actual add to album functionality
+        }}
+        photoId={photo?.id}
+      />
     </View>
   );
 }
@@ -404,32 +467,34 @@ const styles = StyleSheet.create({
   },
   menuOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
     zIndex: 100,
   },
   menu: {
     position: "absolute",
-    top: verticalScale(80),
-    right: spacing.lg,
+    top: verticalScale(50),
+    right: scale(12),
     backgroundColor: "#FFFFFF",
-    borderRadius: radius.md,
+    borderRadius: scale(12),
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 10,
     zIndex: 101,
-    minWidth: scale(180),
+    minWidth: scale(200),
+    paddingVertical: scale(8),
   },
   menuItem: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
-    gap: spacing.md,
+    paddingVertical: scale(12),
+    paddingHorizontal: scale(16),
+    gap: scale(14),
   },
   menuItemText: {
     fontSize: fontScale(15),
+    fontWeight: "500",
     color: "#1A1A1A",
   },
 });

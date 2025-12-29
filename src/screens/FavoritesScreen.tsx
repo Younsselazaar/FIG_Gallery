@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,7 @@ import {
   Pressable,
   RefreshControl,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 
 import Header from "../components/Header";
 import { PhotoGridSection, PhotoItem, PhotoSection } from "../components/PhotoGrid";
@@ -67,11 +67,7 @@ export default function FavoritesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadPhotos();
-  }, []);
-
-  const loadPhotos = async () => {
+  const loadPhotos = useCallback(async () => {
     try {
       const list = await getFavoritePhotos();
       setPhotos(
@@ -87,13 +83,20 @@ export default function FavoritesScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  // Reload favorites when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadPhotos();
+    }, [loadPhotos])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadPhotos();
     setRefreshing(false);
-  }, []);
+  }, [loadPhotos]);
 
   const sections = useMemo(() => groupPhotosByDate(photos), [photos]);
 

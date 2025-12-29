@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   RefreshControl,
   Dimensions,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Svg, { Path, Rect, Circle } from "react-native-svg";
 
 import Header from "../components/Header";
@@ -158,9 +158,7 @@ export default function HomeScreen() {
 
   const toggleGridView = () => setGridColumns((prev) => (prev === 4 ? 5 : 4));
 
-  useEffect(() => { loadPhotos(); }, []);
-
-  const loadPhotos = async () => {
+  const loadPhotos = useCallback(async () => {
     try {
       const list = await getAllPhotos();
       setPhotos(list.map((p: any) => ({
@@ -169,9 +167,16 @@ export default function HomeScreen() {
       })));
     } catch (error) { console.error("Error loading photos:", error); }
     finally { setLoading(false); }
-  };
+  }, []);
 
-  const onRefresh = useCallback(async () => { setRefreshing(true); await loadPhotos(); setRefreshing(false); }, []);
+  // Reload photos when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadPhotos();
+    }, [loadPhotos])
+  );
+
+  const onRefresh = useCallback(async () => { setRefreshing(true); await loadPhotos(); setRefreshing(false); }, [loadPhotos]);
   const sections = useMemo(() => groupPhotosByDate(photos), [photos]);
 
   const handlePhotoPress = (photoId: string) => {
