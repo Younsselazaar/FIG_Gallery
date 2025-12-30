@@ -3,10 +3,13 @@
   "version": "5.2.0",
   "private": true,
   "scripts": {
-    "start": "react-native start",
+    "start": "react-native start --reset-cache",
     "android": "react-native run-android",
-    "build:debug": "cd android && ./gradlew assembleDebug",
-    "build:release": "cd android && ./gradlew assembleRelease"
+    "clean": "cd android && gradlew.bat clean",
+    "clean:cache": "if exist node_modules\\.cache rmdir /s /q node_modules\\.cache",
+    "fresh": "npm run clean:cache && npm run clean && react-native run-android",
+    "build:debug": "cd android && gradlew.bat clean && gradlew.bat assembleDebug",
+    "build:release": "cd android && gradlew.bat clean && gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "~1.21.0",
@@ -22,7 +25,8 @@
     "react-native-safe-area-context": "~4.8.2",
     "react-native-screens": "~3.29.0",
     "react-native-sqlite-storage": "~6.0.1",
-    "react-native-svg": "~14.1.0"
+    "react-native-svg": "~14.1.0",
+    "react-native-view-shot": "^3.8.0"
   },
   "devDependencies": {
     "@react-native/metro-config": "^0.83.1",
