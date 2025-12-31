@@ -7,9 +7,12 @@ import {
   Pressable,
   StatusBar,
   Share,
+  Alert,
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
+import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import Svg, { Path, Circle } from "react-native-svg";
+import RNFS from "react-native-fs";
 
 import {
   getPhotoById,
@@ -17,6 +20,7 @@ import {
   markFavorite,
   trashPhoto,
 } from "../db/photoRepository";
+import { addPhotoToAlbum } from "../db/albumRepository";
 import { trackPhotoView } from "../services/viewTracking";
 import AddToAlbumModal from "../components/AddToAlbumModal";
 
@@ -33,6 +37,7 @@ import { scale, fontScale, verticalScale } from "../theme/responsive";
 
 type RouteParams = {
   photoId: string;
+  mediaType?: "photo" | "video";
 };
 
 // Icons
@@ -108,6 +113,15 @@ function DeleteIcon({ size = 24, color = "white" }: { size?: number; color?: str
   );
 }
 
+function PlayIcon({ size = 48, color = "white" }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Circle cx="12" cy="12" r="11" fill="rgba(0,0,0,0.5)" />
+      <Path d="M9.5 7.5V16.5L16.5 12L9.5 7.5Z" fill={color} />
+    </Svg>
+  );
+}
+
 function formatDate(dateStr: string | number): string {
   const date = new Date(dateStr);
   return date.toLocaleDateString("en-US", {
@@ -117,19 +131,29 @@ function formatDate(dateStr: string | number): string {
   });
 }
 
+// Helper to detect if URI is a video
+function isVideoUri(uri: string): boolean {
+  const videoExtensions = [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp"];
+  const lowerUri = uri.toLowerCase();
+  return videoExtensions.some((ext) => lowerUri.includes(ext)) || lowerUri.includes("video");
+}
+
 export default function ViewerScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
-  const { photoId } = route.params as RouteParams;
+  const { photoId, mediaType: routeMediaType } = route.params as RouteParams;
 
   const [photo, setPhoto] = useState<any>(null);
   const [allPhotos, setAllPhotos] = useState<any[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [addToMenuOpen, setAddToMenuOpen] = useState(false);
   const [addToAlbumVisible, setAddToAlbumVisible] = useState(false);
+  const [mediaTypeMap, setMediaTypeMap] = useState<Map<string, "photo" | "video">>(new Map());
 
   useEffect(() => {
     loadData();
+    loadMediaTypes();
   }, [photoId]);
 
   const loadData = async () => {
@@ -147,6 +171,27 @@ export default function ViewerScreen() {
     setAllPhotos(photos);
     const index = photos.findIndex((p: any) => p.id === photoId);
     setCurrentIndex(index >= 0 ? index : 0);
+  };
+
+  // Load media types from CameraRoll to properly detect videos
+  const loadMediaTypes = async () => {
+    try {
+      const result = await CameraRoll.getPhotos({
+        first: 5000,
+        assetType: "All",
+        groupTypes: "All",
+      });
+
+      const typeMap = new Map<string, "photo" | "video">();
+      result.edges.forEach((edge) => {
+        const uri = edge.node.image.uri;
+        const isVideo = edge.node.type?.includes("video") || false;
+        typeMap.set(uri, isVideo ? "video" : "photo");
+      });
+      setMediaTypeMap(typeMap);
+    } catch (error) {
+      console.log("Error loading media types:", error);
+    }
   };
 
   const toggleFavorite = async () => {
@@ -191,10 +236,40 @@ export default function ViewerScreen() {
     }
   };
 
+  // Open video with share menu to select video player
+  const playVideo = async () => {
+    Alert.alert(
+      "Play Video",
+      "Choose how to play this video:",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Open with...",
+          onPress: async () => {
+            try {
+              await Share.share({
+                url: photo.uri,
+                title: "Play Video",
+              });
+            } catch (error) {
+              console.log("Error sharing video:", error);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (!photo) return null;
 
   const isFavorite = photo.favorite === 1;
   const isEdited = photo.edited === 1;
+
+  // Check video status from multiple sources
+  const isVideo =
+    routeMediaType === "video" ||
+    mediaTypeMap.get(photo.uri) === "video" ||
+    isVideoUri(photo.uri);
 
   return (
     <View style={styles.container}>
@@ -237,7 +312,7 @@ export default function ViewerScreen() {
         </View>
       )}
 
-      {/* Image with navigation */}
+      {/* Image/Video with navigation */}
       <View style={styles.imageContainer}>
         {currentIndex > 0 && (
           <Pressable style={[styles.navButton, styles.navLeft]} onPress={goToPrevious}>
@@ -245,11 +320,28 @@ export default function ViewerScreen() {
           </Pressable>
         )}
 
-        <Image
-          source={{ uri: photo.uri }}
-          style={styles.image}
-          resizeMode="contain"
-        />
+        {isVideo ? (
+          <Pressable style={styles.videoContainer} onPress={playVideo}>
+            <Image
+              source={{ uri: photo.uri }}
+              style={styles.image}
+              resizeMode="contain"
+            />
+            {/* Play button overlay */}
+            <View style={styles.playOverlay}>
+              <View style={styles.playButton}>
+                <PlayIcon size={scale(56)} />
+              </View>
+              <Text style={styles.tapToPlayText}>Tap to play video</Text>
+            </View>
+          </Pressable>
+        ) : (
+          <Image
+            source={{ uri: photo.uri }}
+            style={styles.image}
+            resizeMode="contain"
+          />
+        )}
 
         {currentIndex < allPhotos.length - 1 && (
           <Pressable style={[styles.navButton, styles.navRight]} onPress={goToNext}>
@@ -257,6 +349,54 @@ export default function ViewerScreen() {
           </Pressable>
         )}
       </View>
+
+      {/* Add to popup menu */}
+      {addToMenuOpen && (
+        <>
+          <Pressable style={styles.addToMenuOverlay} onPress={() => setAddToMenuOpen(false)} />
+          <View style={styles.addToMenu}>
+            {/* Album */}
+            <Pressable
+              style={styles.addToMenuItem}
+              onPress={() => {
+                setAddToMenuOpen(false);
+                setAddToAlbumVisible(true);
+              }}
+            >
+              <Svg width={scale(22)} height={scale(22)} viewBox="0 0 24 24">
+                <Path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zm-8-2h2v-4h4v-2h-4V7h-2v4H7v2h4v4z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.addToMenuText}>Album</Text>
+            </Pressable>
+            {/* Archive */}
+            <Pressable
+              style={styles.addToMenuItem}
+              onPress={() => {
+                setAddToMenuOpen(false);
+                Alert.alert("Archive", "Photo archived");
+              }}
+            >
+              <Svg width={scale(22)} height={scale(22)} viewBox="0 0 24 24">
+                <Path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.addToMenuText}>Archive</Text>
+            </Pressable>
+            {/* Locked folder */}
+            <Pressable
+              style={styles.addToMenuItem}
+              onPress={() => {
+                setAddToMenuOpen(false);
+                Alert.alert("Locked folder", "Photo moved to locked folder");
+              }}
+            >
+              <Svg width={scale(22)} height={scale(22)} viewBox="0 0 24 24">
+                <Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" fill="#1A1A1A" />
+              </Svg>
+              <Text style={styles.addToMenuText}>Locked folder</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
 
       {/* Bottom action bar */}
       <View style={styles.bottomBar}>
@@ -273,7 +413,7 @@ export default function ViewerScreen() {
           <Text style={styles.actionText}>Edit</Text>
         </Pressable>
 
-        <Pressable style={styles.actionButton} onPress={() => setAddToAlbumVisible(true)}>
+        <Pressable style={styles.actionButton} onPress={() => setAddToMenuOpen(true)}>
           <AddIcon size={scale(22)} />
           <Text style={styles.actionText}>Add to</Text>
         </Pressable>
@@ -361,9 +501,55 @@ export default function ViewerScreen() {
       <AddToAlbumModal
         visible={addToAlbumVisible}
         onClose={() => setAddToAlbumVisible(false)}
-        onSelectAlbum={(albumId, albumName) => {
-          console.log(`Adding photo to album: ${albumName}`);
-          // TODO: Implement actual add to album functionality
+        onSelectAlbum={async (albumId, albumName) => {
+          if (!photo) return;
+
+          try {
+            if (albumId === "favorites") {
+              // Handle Favorites specially - mark as favorite
+              await markFavorite(photo.id, true);
+              setPhoto({ ...photo, favorite: 1 });
+              Alert.alert("Added", `Photo added to Favorites`);
+            } else if (albumId.startsWith("device_")) {
+              // Copy photo to device album using RNFS
+              const deviceAlbumName = albumId.replace("device_", "");
+
+              try {
+                // Create a temp file path
+                const timestamp = Date.now();
+                const tempPath = `${RNFS.CachesDirectoryPath}/temp_photo_${timestamp}.jpg`;
+
+                // Read the content:// URI and copy to temp file
+                const base64Data = await RNFS.readFile(photo.uri, "base64");
+                await RNFS.writeFile(tempPath, base64Data, "base64");
+
+                // Save from temp file to the device album
+                await CameraRoll.save(`file://${tempPath}`, {
+                  type: "photo",
+                  album: deviceAlbumName,
+                });
+
+                // Clean up temp file
+                await RNFS.unlink(tempPath);
+
+                Alert.alert("Added", `Photo copied to ${deviceAlbumName}`);
+              } catch (saveError: any) {
+                console.error("Error copying to device album:", saveError);
+                Alert.alert(
+                  "Error",
+                  `Could not copy photo to ${deviceAlbumName}. ${saveError?.message || ""}`
+                );
+              }
+            } else {
+              // Add to custom album (database)
+              await addPhotoToAlbum(albumId, photo.id);
+              Alert.alert("Added", `Photo added to ${albumName}`);
+            }
+            console.log(`Added photo to album: ${albumName}`);
+          } catch (error) {
+            console.error("Error adding photo to album:", error);
+            Alert.alert("Error", "Failed to add photo to album. Please try again.");
+          }
         }}
         photoId={photo?.id}
       />
@@ -496,5 +682,62 @@ const styles = StyleSheet.create({
     fontSize: fontScale(15),
     fontWeight: "500",
     color: "#1A1A1A",
+  },
+  addToMenuOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "transparent",
+    zIndex: 50,
+  },
+  addToMenu: {
+    position: "absolute",
+    bottom: verticalScale(90),
+    left: "50%",
+    marginLeft: -scale(80),
+    backgroundColor: "#FFFFFF",
+    borderRadius: scale(12),
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 10,
+    zIndex: 51,
+    minWidth: scale(160),
+    paddingVertical: scale(8),
+  },
+  addToMenuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: scale(14),
+    paddingHorizontal: scale(18),
+    gap: scale(14),
+  },
+  addToMenuText: {
+    fontSize: fontScale(16),
+    fontWeight: "500",
+    color: "#1A1A1A",
+  },
+  videoContainer: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  playOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  playButton: {
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  tapToPlayText: {
+    color: "white",
+    fontSize: fontScale(14),
+    fontWeight: "500",
+    marginTop: scale(12),
+    textShadowColor: "rgba(0, 0, 0, 0.5)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
 });

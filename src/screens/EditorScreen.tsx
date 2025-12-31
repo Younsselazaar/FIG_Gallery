@@ -549,7 +549,7 @@ export default function EditorScreen() {
           <Brightness amount={combinedBrightness}>
             <Contrast amount={combinedContrast}>
               <Saturate amount={saturationAmount}>
-                <Image source={{ uri: photo.uri }} style={styles.image} resizeMode="cover" />
+                <Image source={{ uri: photo.uri }} style={styles.image} resizeMode="contain" />
               </Saturate>
             </Contrast>
           </Brightness>
@@ -665,6 +665,48 @@ export default function EditorScreen() {
   const handleRotate = () => {
     setRotation((prev) => (prev + 90) % 360);
   };
+
+  // Check if rotation is 90 or 270 degrees (where width/height swap)
+  const isRotated90or270 = rotation === 90 || rotation === 270;
+
+  // Swap container aspect ratio when rotated 90/270
+  const containerAspectRatio = useMemo(() => {
+    if (!imageSize) return undefined;
+    const originalRatio = imageSize.width / imageSize.height;
+    return isRotated90or270 ? (1 / originalRatio) : originalRatio;
+  }, [imageSize, isRotated90or270]);
+
+  // Calculate rotation style with proper scaling for 90/270 degree rotations
+  const getRotatedImageStyle = useMemo(() => {
+    if (!imageSize) {
+      return {
+        width: '100%',
+        height: '100%',
+        transform: [{ rotate: `${rotation}deg` }]
+      };
+    }
+
+    // For 90 or 270 degree rotation, we need to scale the image to fill the container
+    if (isRotated90or270) {
+      const aspectRatio = imageSize.width / imageSize.height;
+      // Scale factor to make the rotated image fill the container
+      const scale = aspectRatio > 1 ? aspectRatio : 1 / aspectRatio;
+      return {
+        width: '100%',
+        height: '100%',
+        transform: [
+          { rotate: `${rotation}deg` },
+          { scale: scale }
+        ]
+      };
+    }
+
+    return {
+      width: '100%',
+      height: '100%',
+      transform: [{ rotate: `${rotation}deg` }]
+    };
+  }, [rotation, imageSize, isRotated90or270]);
 
   const handleToolsReset = () => {
     setRotation(0);
@@ -819,14 +861,14 @@ export default function EditorScreen() {
         ref={imageContainerRef}
         style={[
           styles.imageContainer,
-          imageSize && { aspectRatio: imageSize.width / imageSize.height }
+          containerAspectRatio && { aspectRatio: containerAspectRatio }
         ]}
         {...(activeTab === "draw" ? drawPanResponder.panHandlers : {})}
         collapsable={false}
       >
-        <View style={[styles.imageWrapper, { transform: [{ rotate: `${rotation}deg` }] }]}>
+        <View style={[styles.imageWrapper, getRotatedImageStyle]}>
           {showOriginal ? (
-            <Image source={{ uri: photo.uri }} style={styles.image} resizeMode="cover" />
+            <Image source={{ uri: photo.uri }} style={styles.image} resizeMode="contain" />
           ) : (
             filteredImage
           )}

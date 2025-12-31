@@ -142,6 +142,33 @@ export async function getTrashedPhotos(): Promise<Photo[]> {
   return photos;
 }
 
+export async function cleanupStalePhotos(validUris: Set<string>): Promise<number> {
+  const db = await getDB();
+  const results = await db.executeSql(
+    `SELECT id, uri FROM photos WHERE trashed = 0`
+  );
+
+  const rows = results[0].rows;
+  const staleIds: string[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const photo = rows.item(i);
+    if (!validUris.has(photo.uri)) {
+      staleIds.push(photo.id);
+    }
+  }
+
+  if (staleIds.length > 0) {
+    // Delete stale photos from database
+    for (const id of staleIds) {
+      await db.executeSql(`DELETE FROM photos WHERE id = ?`, [id]);
+      await db.executeSql(`DELETE FROM album_photos WHERE photoId = ?`, [id]);
+    }
+  }
+
+  return staleIds.length;
+}
+
 export async function searchPhotos(query: string): Promise<Photo[]> {
   const db = await getDB();
   const searchTerm = `%${query}%`;

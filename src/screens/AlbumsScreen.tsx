@@ -7,13 +7,16 @@ import {
   ScrollView,
   RefreshControl,
   Image,
+  TextInput,
+  Alert,
 } from "react-native";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Svg, { Path, Rect, Defs, LinearGradient, Stop, Circle } from "react-native-svg";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 
 import Header from "../components/Header";
-import { getAllAlbums, createAlbum } from "../db/albumRepository";
+import SideDrawer from "../components/SideDrawer";
+import { getAllAlbums, createAlbum, deleteAlbum } from "../db/albumRepository";
 import { getAllPhotos, getFavoritePhotos } from "../db/photoRepository";
 import { requestMediaPermission } from "../services/mediaScanner";
 import { getRecentlyViewedIds, getMostViewedIds } from "../services/viewTracking";
@@ -38,7 +41,7 @@ const CARD_HEIGHT = CARD_WIDTH;
 const THUMB_SIZE = scale(70);
 
 // Album types for different icons
-type AlbumType = "camera" | "screenshots" | "favorites" | "hidden" | "folder";
+type AlbumType = "camera" | "screenshots" | "favorites" | "hidden" | "folder" | "videos";
 
 interface DisplayAlbum {
   id: string;
@@ -116,6 +119,17 @@ function LockIcon({ size = 48, color = "rgba(255,255,255,0.5)" }: { size?: numbe
   );
 }
 
+function VideoIcon({ size = 48, color = "rgba(255,255,255,0.5)" }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Rect x="2" y="4" width="15" height="16" rx="2" fill="none" stroke={color} strokeWidth="2" />
+      <Path d="M17 8L22 5V19L17 16" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <Circle cx="9.5" cy="12" r="3" fill="none" stroke={color} strokeWidth="1.5" />
+      <Path d="M8.5 12L11 12" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 function FolderIcon({ size = 48, color = "rgba(255,255,255,0.5)" }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
@@ -160,6 +174,8 @@ function getAlbumIcon(type: AlbumType, size: number = scale(40)) {
       return <HeartIcon size={size} color={color} />;
     case "hidden":
       return <LockIcon size={size} color={color} />;
+    case "videos":
+      return <VideoIcon size={size} color={color} />;
     case "folder":
     default:
       return <FolderIcon size={size} color={color} />;
@@ -194,9 +210,9 @@ function PhotoThumbnail({ photo, onPress }: { photo: PhotoThumb; onPress: () => 
 }
 
 // Album Card Component
-function AlbumCard({ album, onPress }: { album: DisplayAlbum; onPress: () => void }) {
+function AlbumCard({ album, onPress, selectionMode, isSelected }: { album: DisplayAlbum; onPress: () => void; selectionMode?: boolean; isSelected?: boolean }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.card, pressed && styles.cardPressed, isSelected && styles.cardSelected]}>
       {/* Gradient background */}
       <Svg style={StyleSheet.absoluteFill} width="100%" height="100%">
         <Defs>
@@ -221,6 +237,13 @@ function AlbumCard({ album, onPress }: { album: DisplayAlbum; onPress: () => voi
       {/* Lock badge for hidden albums */}
       {album.type === "hidden" && <LockBadge size={scale(14)} />}
 
+      {/* Selection checkmark */}
+      {selectionMode && isSelected && (
+        <View style={styles.selectionBadge}>
+          <Text style={styles.checkmarkText}>✓</Text>
+        </View>
+      )}
+
       {/* Album info at bottom */}
       <View style={styles.cardInfo}>
         <Text style={styles.cardName} numberOfLines={1}>{album.name}</Text>
@@ -237,6 +260,15 @@ export default function AlbumsScreen() {
   const [recentlyViewed, setRecentlyViewed] = useState<PhotoThumb[]>([]);
   const [mostViewed, setMostViewed] = useState<PhotoThumb[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+
+  // New album modal
+  const [showNewAlbumInput, setShowNewAlbumInput] = useState(false);
+  const [newAlbumName, setNewAlbumName] = useState("");
+
+  // Selection mode
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedAlbums, setSelectedAlbums] = useState<string[]>([]);
 
   const loadData = useCallback(async () => {
     try {
@@ -248,7 +280,7 @@ export default function AlbumsScreen() {
       if (hasPermission) {
         // Get device albums from CameraRoll
         try {
-          const deviceAlbums = await CameraRoll.getAlbums({ assetType: "Photos" });
+          const deviceAlbums = await CameraRoll.getAlbums({ assetType: "All" });
 
           for (const deviceAlbum of deviceAlbums) {
             const type = getAlbumType(deviceAlbum.title);
@@ -259,7 +291,7 @@ export default function AlbumsScreen() {
               const photos = await CameraRoll.getPhotos({
                 first: 1,
                 groupName: deviceAlbum.title,
-                assetType: "Photos",
+                assetType: "All",
               });
               if (photos.edges.length > 0) {
                 coverUri = photos.edges[0].node.image.uri;
@@ -279,6 +311,30 @@ export default function AlbumsScreen() {
           }
         } catch (err) {
           console.log("Error loading device albums:", err);
+        }
+
+        // Add Videos album - all videos from device
+        try {
+          const videosResult = await CameraRoll.getPhotos({
+            first: 1000,
+            assetType: "Videos",
+            groupTypes: "All",
+          });
+
+          const videoCount = videosResult.edges.length;
+          if (videoCount > 0) {
+            const coverUri = videosResult.edges[0]?.node.image.uri;
+            displayAlbums.unshift({
+              id: "all_videos",
+              name: "Videos",
+              type: "videos",
+              count: videoCount,
+              coverUri,
+              isDevice: true,
+            });
+          }
+        } catch (err) {
+          console.log("Error loading videos:", err);
         }
       }
 
@@ -384,13 +440,85 @@ export default function AlbumsScreen() {
     }
   };
 
+  const handleShowNewAlbumInput = () => {
+    setNewAlbumName("");
+    setShowNewAlbumInput(true);
+  };
+
   const handleCreateAlbum = async () => {
-    await createAlbum("New Album");
-    loadData();
+    if (newAlbumName.trim()) {
+      await createAlbum(newAlbumName.trim());
+      setShowNewAlbumInput(false);
+      setNewAlbumName("");
+      loadData();
+    }
+  };
+
+  const handleCancelNewAlbum = () => {
+    setShowNewAlbumInput(false);
+    setNewAlbumName("");
   };
 
   const handlePhotoPress = (photoId: string) => {
     navigation.navigate("Viewer", { photoId });
+  };
+
+  // Selection mode handlers
+  const enterSelectionMode = () => {
+    setSelectionMode(true);
+    setSelectedAlbums([]);
+  };
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedAlbums([]);
+  };
+
+  const toggleAlbumSelection = (albumId: string) => {
+    if (selectedAlbums.includes(albumId)) {
+      setSelectedAlbums(selectedAlbums.filter((id) => id !== albumId));
+    } else {
+      setSelectedAlbums([...selectedAlbums, albumId]);
+    }
+  };
+
+  const handleDeleteSelectedAlbums = () => {
+    if (selectedAlbums.length === 0) return;
+
+    // Filter out system albums (favorites, hidden, device albums)
+    const deletableAlbums = selectedAlbums.filter((id) => {
+      const album = albums.find((a) => a.id === id);
+      return album && !album.isDevice && id !== "favorites" && id !== "hidden";
+    });
+
+    if (deletableAlbums.length === 0) {
+      Alert.alert("Cannot Delete", "System albums and device albums cannot be deleted.");
+      return;
+    }
+
+    Alert.alert(
+      "Delete Albums",
+      `Delete ${deletableAlbums.length} album${deletableAlbums.length > 1 ? "s" : ""}? Photos will not be deleted.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              for (const albumId of deletableAlbums) {
+                await deleteAlbum(albumId);
+              }
+              exitSelectionMode();
+              loadData();
+            } catch (error) {
+              console.error("Error deleting albums:", error);
+              Alert.alert("Error", "Failed to delete albums");
+            }
+          },
+        },
+      ]
+    );
   };
 
   // Split albums into rows for the grid
@@ -401,24 +529,59 @@ export default function AlbumsScreen() {
 
   return (
     <View style={styles.container}>
-      <Header onMenuPress={() => {}} />
+      <Header onMenuPress={() => setDrawerVisible(true)} />
 
       {/* Title bar */}
       <View style={styles.titleBar}>
         <View>
           <Text style={styles.title}>Albums</Text>
-          <Text style={styles.subtitle}>{albums.length} albums</Text>
+          <Text style={styles.subtitle}>
+            {selectionMode ? `${selectedAlbums.length} selected` : `${albums.length} albums`}
+          </Text>
         </View>
         <View style={styles.titleButtons}>
-          <Pressable style={styles.selectButton}>
-            <Text style={styles.selectButtonText}>Select</Text>
-          </Pressable>
-          <Pressable style={styles.newButton} onPress={handleCreateAlbum}>
-            <AddIcon size={scale(18)} color="#FFFFFF" />
-            <Text style={styles.newButtonText}>New</Text>
-          </Pressable>
+          {selectionMode ? (
+            <>
+              <Pressable style={styles.cancelButton} onPress={exitSelectionMode}>
+                <Text style={styles.cancelButtonText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.deleteButton} onPress={handleDeleteSelectedAlbums}>
+                <Text style={styles.deleteButtonText}>Delete</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Pressable style={styles.selectButton} onPress={enterSelectionMode}>
+                <Text style={styles.selectButtonText}>Select</Text>
+              </Pressable>
+              <Pressable style={styles.newButton} onPress={handleShowNewAlbumInput}>
+                <AddIcon size={scale(18)} color="#FFFFFF" />
+                <Text style={styles.newButtonText}>New</Text>
+              </Pressable>
+            </>
+          )}
         </View>
       </View>
+
+      {/* New Album Input */}
+      {showNewAlbumInput && (
+        <View style={styles.newAlbumInputRow}>
+          <TextInput
+            style={styles.newAlbumInput}
+            placeholder="Album name..."
+            placeholderTextColor={light.textTertiary}
+            value={newAlbumName}
+            onChangeText={setNewAlbumName}
+            autoFocus
+          />
+          <Pressable style={styles.addAlbumButton} onPress={handleCreateAlbum}>
+            <Text style={styles.addAlbumButtonText}>Add</Text>
+          </Pressable>
+          <Pressable onPress={handleCancelNewAlbum}>
+            <Text style={styles.cancelText}>Cancel</Text>
+          </Pressable>
+        </View>
+      )}
 
       <ScrollView
         style={styles.scrollView}
@@ -453,7 +616,18 @@ export default function AlbumsScreen() {
             <View key={rowIndex} style={styles.albumRow}>
               {row.map((album) => (
                 <View key={album.id} style={styles.cardWrapper}>
-                  <AlbumCard album={album} onPress={() => handleOpenAlbum(album)} />
+                  <AlbumCard
+                    album={album}
+                    onPress={() => {
+                      if (selectionMode) {
+                        toggleAlbumSelection(album.id);
+                      } else {
+                        handleOpenAlbum(album);
+                      }
+                    }}
+                    selectionMode={selectionMode}
+                    isSelected={selectedAlbums.includes(album.id)}
+                  />
                 </View>
               ))}
               {/* Fill empty spaces in last row */}
@@ -490,6 +664,13 @@ export default function AlbumsScreen() {
 
         <View style={styles.bottomPadding} />
       </ScrollView>
+
+      <SideDrawer
+        visible={drawerVisible}
+        onClose={() => setDrawerVisible(false)}
+        currentScreen="Albums"
+        navigation={navigation}
+      />
     </View>
   );
 }
@@ -640,6 +821,84 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.5)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
+  },
+  cardSelected: {
+    borderWidth: 3,
+    borderColor: brand.teal,
+  },
+  selectionBadge: {
+    position: "absolute",
+    top: scale(8),
+    left: scale(8),
+    width: scale(24),
+    height: scale(24),
+    borderRadius: scale(12),
+    backgroundColor: brand.teal,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  checkmarkText: {
+    color: "#FFFFFF",
+    fontSize: fontScale(14),
+    fontWeight: "bold",
+  },
+  cancelButton: {
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(16),
+    borderRadius: scale(8),
+    borderWidth: 1,
+    borderColor: light.border,
+  },
+  cancelButtonText: {
+    fontSize: fontScale(14),
+    fontWeight: "500",
+    color: light.textPrimary,
+  },
+  deleteButton: {
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(16),
+    borderRadius: scale(8),
+    backgroundColor: "#EF4444",
+  },
+  deleteButtonText: {
+    fontSize: fontScale(14),
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  newAlbumInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: scale(16),
+    paddingBottom: scale(12),
+    gap: scale(10),
+  },
+  newAlbumInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: light.border,
+    borderRadius: scale(8),
+    paddingHorizontal: scale(14),
+    paddingVertical: scale(10),
+    fontSize: fontScale(15),
+    color: light.textPrimary,
+    backgroundColor: light.surface,
+  },
+  addAlbumButton: {
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(18),
+    borderRadius: scale(8),
+    backgroundColor: "#1F2937",
+  },
+  addAlbumButtonText: {
+    fontSize: fontScale(14),
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  cancelText: {
+    fontSize: fontScale(14),
+    fontWeight: "500",
+    color: light.textPrimary,
+    paddingHorizontal: scale(8),
   },
   bottomPadding: {
     height: scale(100),

@@ -23,6 +23,9 @@
     <!-- Foreground service (future-safe, gallery scans) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
+    <!-- Internet for debug Metro bundler -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- =====================================================
          Application
          ===================================================== -->
@@ -33,6 +36,7 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="true"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
 
         <!-- =================================================

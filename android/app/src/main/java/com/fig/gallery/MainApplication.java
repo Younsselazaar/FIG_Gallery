@@ -30,8 +30,7 @@ public class MainApplication extends Application implements ReactApplication {
 
                 @Override
                 public boolean getUseDeveloperSupport() {
-                    // Always false for FIG builds
-                    return false;
+                    return BuildConfig.DEBUG;
                 }
 
                 @Override

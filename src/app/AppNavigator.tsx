@@ -9,6 +9,7 @@ import EditorScreen from "../screens/EditorScreen";
 import AlbumsScreen from "../screens/AlbumsScreen";
 import AlbumViewScreen from "../screens/AlbumViewScreen";
 import TrashScreen from "../screens/TrashScreen";
+import TagsScreen from "../screens/TagsScreen";
 import LockedFolderScreen from "../screens/LockedFolderScreen";
 import PinScreen from "../screens/PinScreen";
 
@@ -32,6 +33,7 @@ export type RootStackParamList = {
   Albums: undefined;
   AlbumView: { albumId: string };
   Trash: undefined;
+  Tags: undefined;
   LockedFolder: undefined;
   Pin: { mode: "enter" | "set" };
 };
@@ -59,6 +61,7 @@ export default function AppNavigator() {
       <Stack.Screen name="AlbumView" component={AlbumViewScreen} />
 
       <Stack.Screen name="Trash" component={TrashScreen} />
+      <Stack.Screen name="Tags" component={TagsScreen} />
       <Stack.Screen name="LockedFolder" component={LockedFolderScreen} />
       <Stack.Screen name="Pin" component={PinScreen} />
     </Stack.Navigator>

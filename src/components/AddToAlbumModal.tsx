@@ -7,8 +7,9 @@ import {
   Pressable,
   ScrollView,
   Dimensions,
+  Alert,
 } from "react-native";
-import Svg, { Path, Circle, Rect } from "react-native-svg";
+import Svg, { Path } from "react-native-svg";
 import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 
 import { getAllAlbums, createAlbum } from "../db/albumRepository";
@@ -88,11 +89,13 @@ function AlbumRow({
 export default function AddToAlbumModal({ visible, onClose, onSelectAlbum, photoId }: Props) {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
+  const [selectedAlbumName, setSelectedAlbumName] = useState<string | null>(null);
 
   useEffect(() => {
     if (visible) {
       loadAlbums();
       setSelectedAlbumId(null);
+      setSelectedAlbumName(null);
     }
   }, [visible]);
 
@@ -100,28 +103,7 @@ export default function AddToAlbumModal({ visible, onClose, onSelectAlbum, photo
     try {
       const allAlbums: Album[] = [];
 
-      // Request permission first
-      const hasPermission = await requestMediaPermission();
-
-      if (hasPermission) {
-        // Get device albums from CameraRoll
-        try {
-          const deviceAlbums = await CameraRoll.getAlbums({ assetType: "Photos" });
-
-          for (const deviceAlbum of deviceAlbums) {
-            allAlbums.push({
-              id: `device_${deviceAlbum.title}`,
-              name: deviceAlbum.title,
-              count: deviceAlbum.count || 0,
-              isDevice: true,
-            });
-          }
-        } catch (err) {
-          console.log("Error loading device albums:", err);
-        }
-      }
-
-      // Add Favorites
+      // Add Favorites first
       allAlbums.push({
         id: "favorites",
         name: "Favorites",
@@ -140,6 +122,24 @@ export default function AddToAlbumModal({ visible, onClose, onSelectAlbum, photo
         });
       }
 
+      // Get device albums from CameraRoll
+      const hasPermission = await requestMediaPermission();
+      if (hasPermission) {
+        try {
+          const deviceAlbums = await CameraRoll.getAlbums({ assetType: "All" });
+          for (const deviceAlbum of deviceAlbums) {
+            allAlbums.push({
+              id: `device_${deviceAlbum.title}`,
+              name: deviceAlbum.title,
+              count: deviceAlbum.count || 0,
+              isDevice: true,
+            });
+          }
+        } catch (err) {
+          console.log("Error loading device albums:", err);
+        }
+      }
+
       setAlbums(allAlbums);
     } catch (error) {
       console.error("Error loading albums:", error);
@@ -147,14 +147,23 @@ export default function AddToAlbumModal({ visible, onClose, onSelectAlbum, photo
   };
 
   const handleCreateNewAlbum = async () => {
-    const newAlbum = await createAlbum("New Album");
-    loadAlbums();
+    // Create album with timestamp name
+    const albumName = `Album ${new Date().toLocaleDateString()}`;
+    await createAlbum(albumName);
+    await loadAlbums();
+    Alert.alert("Created", `Album "${albumName}" created. Tap it to add photos.`);
   };
 
   const handleSelectAlbum = (album: Album) => {
     setSelectedAlbumId(album.id);
-    onSelectAlbum(album.id, album.name);
-    onClose();
+    setSelectedAlbumName(album.name);
+  };
+
+  const handleConfirmAdd = () => {
+    if (selectedAlbumId && selectedAlbumName) {
+      onSelectAlbum(selectedAlbumId, selectedAlbumName);
+      onClose();
+    }
   };
 
   return (
@@ -174,11 +183,26 @@ export default function AddToAlbumModal({ visible, onClose, onSelectAlbum, photo
 
           {/* Header */}
           <View style={styles.header}>
+            <Pressable onPress={onClose} style={styles.cancelButton}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
             <Text style={styles.title}>Add to album</Text>
-            <Pressable onPress={handleCreateNewAlbum} style={styles.createButton}>
-              <CreateAlbumIcon size={scale(24)} color="rgba(255,255,255,0.7)" />
+            <Pressable
+              onPress={handleConfirmAdd}
+              style={[styles.addButton, !selectedAlbumId && styles.addButtonDisabled]}
+              disabled={!selectedAlbumId}
+            >
+              <Text style={[styles.addButtonText, !selectedAlbumId && styles.addButtonTextDisabled]}>Add</Text>
             </Pressable>
           </View>
+
+          {/* Create new album button */}
+          <Pressable onPress={handleCreateNewAlbum} style={styles.createNewRow}>
+            <View style={styles.createNewIconContainer}>
+              <CreateAlbumIcon size={scale(24)} color="#34C759" />
+            </View>
+            <Text style={styles.createNewText}>Create new album</Text>
+          </Pressable>
 
           {/* Album list */}
           <ScrollView style={styles.albumList} showsVerticalScrollIndicator={false}>
@@ -228,16 +252,60 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: scale(20),
+    paddingHorizontal: scale(16),
     paddingBottom: scale(16),
   },
   title: {
-    fontSize: fontScale(22),
-    fontWeight: "700",
+    fontSize: fontScale(18),
+    fontWeight: "600",
     color: "#FFFFFF",
   },
-  createButton: {
+  cancelButton: {
     padding: scale(8),
+  },
+  cancelText: {
+    fontSize: fontScale(16),
+    color: "rgba(255,255,255,0.7)",
+  },
+  addButton: {
+    backgroundColor: "#34C759",
+    paddingHorizontal: scale(16),
+    paddingVertical: scale(8),
+    borderRadius: scale(16),
+  },
+  addButtonDisabled: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  addButtonText: {
+    fontSize: fontScale(15),
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  addButtonTextDisabled: {
+    color: "rgba(255,255,255,0.3)",
+  },
+  createNewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: scale(20),
+    paddingVertical: scale(12),
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.1)",
+    marginBottom: scale(8),
+  },
+  createNewIconContainer: {
+    width: scale(40),
+    height: scale(40),
+    borderRadius: scale(20),
+    backgroundColor: "rgba(52, 199, 89, 0.15)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: scale(12),
+  },
+  createNewText: {
+    fontSize: fontScale(16),
+    fontWeight: "500",
+    color: "#34C759",
   },
   albumList: {
     paddingHorizontal: scale(16),

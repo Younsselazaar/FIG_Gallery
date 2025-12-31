@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,15 +7,19 @@ import {
   Pressable,
   RefreshControl,
   Dimensions,
+  Alert,
 } from "react-native";
+import { CameraRoll } from "@react-native-camera-roll/camera-roll";
+import { requestMediaPermission } from "../services/mediaScanner";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Svg, { Path, Rect, Circle } from "react-native-svg";
 
 import Header from "../components/Header";
 import { PhotoGridSection, PhotoItem, PhotoSection } from "../components/PhotoGrid";
 import JumpToDateModal from "../components/JumpToDateModal";
+import SideDrawer from "../components/SideDrawer";
 
-import { getAllPhotos } from "../db/photoRepository";
+import { getAllPhotos, trashPhoto, cleanupStalePhotos } from "../db/photoRepository";
 import { light, brand, ui, semantic } from "../theme/colors";
 import { scale, fontScale } from "../theme/responsive";
 
@@ -155,16 +159,65 @@ export default function HomeScreen() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState<string[]>([]);
   const [jumpToDateVisible, setJumpToDateVisible] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
+
+  // Date filter state
+  const [dateFilterActive, setDateFilterActive] = useState(false);
+  const [filteredDate, setFilteredDate] = useState<Date | null>(null);
+  const [dateFilterMode, setDateFilterMode] = useState<"day" | "week">("day");
+  const [dateFilteredPhotos, setDateFilteredPhotos] = useState<PhotoItem[]>([]);
 
   const toggleGridView = () => setGridColumns((prev) => (prev === 4 ? 5 : 4));
 
   const loadPhotos = useCallback(async () => {
     try {
+      // First get all valid URIs from device to clean up stale database entries
+      const hasPermission = await requestMediaPermission();
+      const mediaTypeMap = new Map<string, { type: "photo" | "video"; duration?: number }>();
+
+      if (hasPermission) {
+        try {
+          const result = await CameraRoll.getPhotos({
+            first: 10000,
+            assetType: "All",
+            groupTypes: "All",
+            include: ["playableDuration"],
+          });
+          const validUris = new Set(result.edges.map((edge) => edge.node.image.uri));
+
+          // Build media type map
+          result.edges.forEach((edge) => {
+            const uri = edge.node.image.uri;
+            const isVideo = edge.node.type?.includes("video") || uri.toLowerCase().includes("video");
+            mediaTypeMap.set(uri, {
+              type: isVideo ? "video" : "photo",
+              duration: edge.node.image.playableDuration || undefined,
+            });
+          });
+
+          // Clean up photos that no longer exist on device
+          const cleaned = await cleanupStalePhotos(validUris);
+          if (cleaned > 0) {
+            console.log(`Cleaned up ${cleaned} stale photos from database`);
+          }
+        } catch (err) {
+          console.log("Error getting device photos for cleanup:", err);
+        }
+      }
+
+      // Now load photos from database
       const list = await getAllPhotos();
-      setPhotos(list.map((p: any) => ({
-        id: p.id, uri: p.uri, favorite: p.favorite === 1,
-        date: p.createdAt ? new Date(p.createdAt).toISOString() : undefined,
-      })));
+      setPhotos(list.map((p: any) => {
+        const mediaInfo = mediaTypeMap.get(p.uri);
+        return {
+          id: p.id,
+          uri: p.uri,
+          favorite: p.favorite === 1,
+          date: p.createdAt ? new Date(p.createdAt).toISOString() : undefined,
+          mediaType: mediaInfo?.type || "photo",
+          duration: mediaInfo?.duration,
+        };
+      }));
     } catch (error) { console.error("Error loading photos:", error); }
     finally { setLoading(false); }
   }, []);
@@ -177,7 +230,95 @@ export default function HomeScreen() {
   );
 
   const onRefresh = useCallback(async () => { setRefreshing(true); await loadPhotos(); setRefreshing(false); }, [loadPhotos]);
-  const sections = useMemo(() => groupPhotosByDate(photos), [photos]);
+
+  // Handle Jump to Date selection
+  const handleJumpToDate = async (date: Date, mode: "day" | "week") => {
+    setFilteredDate(date);
+    setDateFilterMode(mode);
+    setDateFilterActive(true);
+
+    try {
+      const hasPermission = await requestMediaPermission();
+      if (!hasPermission) {
+        console.log("No permission for date filter");
+        setDateFilteredPhotos([]);
+        return;
+      }
+
+      let startDate: Date;
+      let endDate: Date;
+
+      if (mode === "day") {
+        startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+        endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+      } else {
+        // Whole week (Sunday to Saturday)
+        const dayOfWeek = date.getDay();
+        startDate = new Date(date);
+        startDate.setDate(date.getDate() - dayOfWeek);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(startDate);
+        endDate.setDate(startDate.getDate() + 6);
+        endDate.setHours(23, 59, 59, 999);
+      }
+
+      const startTimestamp = Math.floor(startDate.getTime() / 1000);
+      const endTimestamp = Math.floor(endDate.getTime() / 1000);
+
+      const result = await CameraRoll.getPhotos({
+        first: 5000,
+        assetType: "All",
+        groupTypes: "All",
+        include: ["playableDuration"],
+      });
+
+      const filtered: PhotoItem[] = [];
+      for (const edge of result.edges) {
+        const ts = edge.node.timestamp;
+        if (ts && ts >= startTimestamp && ts <= endTimestamp) {
+          const uri = edge.node.image.uri;
+          const isVideo = edge.node.type?.includes("video") || uri.toLowerCase().includes("video");
+          filtered.push({
+            id: uri,
+            uri: uri,
+            favorite: false,
+            date: new Date(ts * 1000).toISOString(),
+            mediaType: isVideo ? "video" : "photo",
+            duration: edge.node.image.playableDuration || undefined,
+          });
+        }
+      }
+
+      console.log(`Date filter: ${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}, found ${filtered.length} photos`);
+      setDateFilteredPhotos(filtered);
+    } catch (error) {
+      console.error("Error filtering by date:", error);
+      setDateFilteredPhotos([]);
+    }
+  };
+
+  const clearDateFilter = () => {
+    setDateFilterActive(false);
+    setFilteredDate(null);
+    setDateFilteredPhotos([]);
+  };
+
+  const formatDateRange = () => {
+    if (!filteredDate) return "";
+    if (dateFilterMode === "day") {
+      return filteredDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    } else {
+      const dayOfWeek = filteredDate.getDay();
+      const start = new Date(filteredDate);
+      start.setDate(filteredDate.getDate() - dayOfWeek);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      return `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    }
+  };
+
+  const displayPhotos = dateFilterActive ? dateFilteredPhotos : photos;
+  const sections = useMemo(() => groupPhotosByDate(displayPhotos), [displayPhotos]);
 
   const handlePhotoPress = (photoId: string) => {
     if (selectionMode) {
@@ -185,7 +326,9 @@ export default function HomeScreen() {
         prev.includes(photoId) ? prev.filter((id) => id !== photoId) : [...prev, photoId]
       );
     } else {
-      navigation.navigate("Viewer", { photoId });
+      // Find the photo to get its mediaType
+      const photo = displayPhotos.find((p) => p.id === photoId);
+      navigation.navigate("Viewer", { photoId, mediaType: photo?.mediaType });
     }
   };
 
@@ -206,13 +349,46 @@ export default function HomeScreen() {
     setMenuVisible(false);
   };
 
+  const handleDeleteSelected = () => {
+    if (selectedPhotos.length === 0) return;
+
+    Alert.alert(
+      "Move to Trash",
+      `Move ${selectedPhotos.length} photo${selectedPhotos.length > 1 ? "s" : ""} to trash?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Move to Trash",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              for (const photoId of selectedPhotos) {
+                await trashPhoto(photoId, true);
+              }
+              exitSelectionMode();
+              loadPhotos();
+            } catch (error) {
+              console.error("Error deleting photos:", error);
+              Alert.alert("Error", "Failed to delete photos");
+            }
+          },
+        },
+      ]
+    );
+    setMenuVisible(false);
+  };
+
   return (
     <View style={styles.container}>
-      <Header onMenuPress={() => {}} />
+      <Header onMenuPress={() => setDrawerVisible(true)} />
       <View style={styles.titleBar}>
-        <View>
-          <Text style={styles.title}>Photos</Text>
-          <Text style={styles.subtitle}>{photos.length} photos</Text>
+        <View style={styles.titleTextContainer}>
+          <Text style={styles.title}>{dateFilterActive ? "Filtered" : "Photos"}</Text>
+          <Text style={styles.subtitle}>
+            {dateFilterActive
+              ? `${dateFilteredPhotos.length} photos • ${formatDateRange()}`
+              : `${photos.length} photos`}
+          </Text>
         </View>
         <View style={styles.titleActions}>
           {selectionMode ? (
@@ -223,6 +399,15 @@ export default function HomeScreen() {
               <Text style={styles.selectedText}>{selectedPhotos.length} selected</Text>
               <Pressable style={styles.moreButtonTeal} onPress={() => setMenuVisible(!menuVisible)}>
                 <MoreIcon size={scale(18)} color="white" />
+              </Pressable>
+            </>
+          ) : dateFilterActive ? (
+            <>
+              <Pressable style={styles.clearFilterButton} onPress={clearDateFilter}>
+                <Text style={styles.clearFilterText}>Clear</Text>
+              </Pressable>
+              <Pressable style={styles.iconButton} onPress={() => setMenuVisible(!menuVisible)}>
+                <MoreIcon size={scale(18)} color={light.textPrimary} />
               </Pressable>
             </>
           ) : (
@@ -261,7 +446,7 @@ export default function HomeScreen() {
                   <HeartIcon size={scale(20)} />
                   <Text style={styles.menuItemText}>Add to Favorites</Text>
                 </Pressable>
-                <Pressable style={styles.menuItem} onPress={() => { setMenuVisible(false); }}>
+                <Pressable style={styles.menuItem} onPress={handleDeleteSelected}>
                   <TrashIcon size={scale(20)} />
                   <Text style={[styles.menuItemText, styles.menuItemTextDelete]}>Delete</Text>
                 </Pressable>
@@ -288,12 +473,20 @@ export default function HomeScreen() {
       )}
 
       <ScrollView style={styles.scrollView} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-        {sections.map((section) => (
-          <View key={section.title}>
-            <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>{section.title}</Text></View>
-            <PhotoGridSection photos={section.data} columns={gridColumns} onPress={handlePhotoPress} showFavorites={true} selectionMode={selectionMode} selectedIds={new Set(selectedPhotos)} />
+        {sections.length > 0 ? (
+          sections.map((section) => (
+            <View key={section.title}>
+              <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>{section.title}</Text></View>
+              <PhotoGridSection photos={section.data} columns={gridColumns} onPress={handlePhotoPress} showFavorites={true} selectionMode={selectionMode} selectedIds={new Set(selectedPhotos)} />
+            </View>
+          ))
+        ) : dateFilterActive ? (
+          <View style={styles.emptyState}>
+            <CalendarIcon size={scale(48)} color={light.textTertiary} />
+            <Text style={styles.emptyTitle}>No photos found</Text>
+            <Text style={styles.emptySubtitle}>No photos from {formatDateRange()}</Text>
           </View>
-        ))}
+        ) : null}
         <View style={styles.bottomPadding} />
       </ScrollView>
 
@@ -301,10 +494,15 @@ export default function HomeScreen() {
       <JumpToDateModal
         visible={jumpToDateVisible}
         onClose={() => setJumpToDateVisible(false)}
-        onSelectDate={(date) => {
-          console.log("Selected date:", date);
-          // TODO: Scroll to the selected date section
-        }}
+        onSelectDate={handleJumpToDate}
+      />
+
+      {/* Side Drawer */}
+      <SideDrawer
+        visible={drawerVisible}
+        onClose={() => setDrawerVisible(false)}
+        currentScreen="Home"
+        navigation={navigation}
       />
     </View>
   );
@@ -313,9 +511,12 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: light.background },
   titleBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: scale(16), paddingVertical: scale(12) },
+  titleTextContainer: { flex: 1 },
   title: { fontSize: fontScale(28), fontWeight: "700", color: light.textPrimary },
   subtitle: { fontSize: fontScale(14), color: light.textSecondary, marginTop: scale(2) },
   titleActions: { flexDirection: "row", alignItems: "center", gap: scale(8) },
+  clearFilterButton: { paddingVertical: scale(8), paddingHorizontal: scale(16), borderRadius: scale(20), backgroundColor: brand.teal },
+  clearFilterText: { fontSize: fontScale(14), fontWeight: "600", color: "#FFFFFF" },
   iconButton: { padding: scale(8), borderRadius: scale(6), borderWidth: 1, borderColor: light.border },
   cancelButton: { paddingVertical: scale(8), paddingHorizontal: scale(16), borderRadius: scale(20), backgroundColor: light.surfaceSecondary },
   cancelButtonText: { fontSize: fontScale(14), fontWeight: "500", color: light.textPrimary },
@@ -331,4 +532,7 @@ const styles = StyleSheet.create({
   menuItem: { flexDirection: "row", alignItems: "center", paddingVertical: scale(12), paddingHorizontal: scale(16), gap: scale(12) },
   menuItemText: { fontSize: fontScale(15), color: light.textPrimary },
   menuItemTextDelete: { color: "#E53935" },
+  emptyState: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: scale(100), paddingHorizontal: scale(24) },
+  emptyTitle: { fontSize: fontScale(18), fontWeight: "600", color: light.textPrimary, marginTop: scale(16) },
+  emptySubtitle: { fontSize: fontScale(14), color: light.textSecondary, marginTop: scale(8), textAlign: "center" },
 });

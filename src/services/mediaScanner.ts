@@ -68,7 +68,7 @@ export async function scanDevicePhotos(): Promise<number> {
       const result = await CameraRoll.getPhotos({
         first: 100,
         after: endCursor,
-        assetType: "Photos",
+        assetType: "All",
         include: ["filename", "fileSize", "imageSize"],
       });
 

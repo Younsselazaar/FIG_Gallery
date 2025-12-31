@@ -11,10 +11,22 @@ import { useNavigation } from "@react-navigation/native";
 import Svg, { Path, Circle, Rect } from "react-native-svg";
 
 import { PhotoGridSection, PhotoItem, PhotoSection } from "../components/PhotoGrid";
+import Header from "../components/Header";
+import SideDrawer from "../components/SideDrawer";
 
 import { searchPhotos, getAllPhotos } from "../db/photoRepository";
-import { light, brand, ui } from "../theme/colors";
+import { getAllAlbums } from "../db/albumRepository";
+import { requestMediaPermission } from "../services/mediaScanner";
+import { CameraRoll } from "@react-native-camera-roll/camera-roll";
+import { light, brand } from "../theme/colors";
 import { scale, fontScale } from "../theme/responsive";
+
+type Album = {
+  id: string;
+  name: string;
+  photoCount: number;
+  coverUri?: string;
+};
 
 type FilterType = "all" | "photos" | "videos";
 
@@ -57,6 +69,46 @@ function FilterIcon({ size = 16, color = light.textSecondary }: { size?: number;
   );
 }
 
+function CloseIcon({ size = 20, color = light.textSecondary }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path d="M18 6L6 18M6 6l12 12" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
+function AlbumCardIcon({ size = 24, color = brand.teal }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="3" y="3" width="18" height="18" rx="2" stroke={color} strokeWidth="2" />
+      <Circle cx="8.5" cy="8.5" r="1.5" fill={color} />
+      <Path d="M21 15L16 10L5 21" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+function HeartCardIcon({ size = 24, color = "#E91E63" }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M12 21.35L10.55 20.03C5.4 15.36 2 12.27 2 8.5C2 5.41 4.42 3 7.5 3C9.24 3 10.91 3.81 12 5.08C13.09 3.81 14.76 3 16.5 3C19.58 3 22 5.41 22 8.5C22 12.27 18.6 15.36 13.45 20.03L12 21.35Z"
+        fill={color}
+      />
+    </Svg>
+  );
+}
+
+function FolderCardIcon({ size = 24, color = "#FF9800" }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"
+        fill={color}
+      />
+    </Svg>
+  );
+}
+
 function formatDateGroup(dateStr: string): string {
   const date = new Date(dateStr);
   const today = new Date();
@@ -84,9 +136,10 @@ export default function SearchScreen() {
   const [filter, setFilter] = useState<FilterType>("all");
   const [results, setResults] = useState<PhotoItem[]>([]);
   const [allPhotos, setAllPhotos] = useState<PhotoItem[]>([]);
+  const [filteredAlbums, setFilteredAlbums] = useState<Album[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
 
-  // Load all photos on mount
   useEffect(() => {
     loadAllPhotos();
   }, []);
@@ -112,33 +165,149 @@ export default function SearchScreen() {
     if (text.length > 0) {
       setHasSearched(true);
       try {
-        const photos = await searchPhotos(text);
-        setResults(
-          photos.map((p: any) => ({
-            id: p.id,
-            uri: p.uri,
-            favorite: p.favorite === 1,
-            date: p.createdAt ? new Date(p.createdAt).toISOString() : undefined,
-          }))
-        );
+        const searchLower = text.toLowerCase();
+        const matchingAlbums: Album[] = [];
+        let allMatchingPhotos: PhotoItem[] = [];
+
+        // Search photos from database
+        const dbPhotos = await searchPhotos(text);
+        allMatchingPhotos = dbPhotos.map((p: any) => ({
+          id: p.id,
+          uri: p.uri,
+          favorite: p.favorite === 1,
+          date: p.createdAt ? new Date(p.createdAt).toISOString() : undefined,
+        }));
+
+        // Check if "Favorites" matches
+        if ("favorites".includes(searchLower)) {
+          matchingAlbums.push({ id: "favorites", name: "Favorites", photoCount: 0 });
+        }
+
+        // Add custom albums from database that match
+        const dbAlbums = await getAllAlbums();
+        dbAlbums.forEach((a: any) => {
+          const albumNameLower = (a.name || "").toLowerCase();
+          if (albumNameLower.includes(searchLower)) {
+            matchingAlbums.push({
+              id: a.id,
+              name: a.name,
+              photoCount: a.photoCount || 0,
+              coverUri: a.coverUri,
+            });
+          }
+        });
+
+        // Search device albums
+        try {
+          const hasPermission = await requestMediaPermission();
+          if (hasPermission) {
+            const deviceAlbums = await CameraRoll.getAlbums({ assetType: "All" });
+
+            for (const deviceAlbum of deviceAlbums) {
+              const albumTitleLower = (deviceAlbum.title || "").toLowerCase();
+              if (albumTitleLower.includes(searchLower)) {
+                matchingAlbums.push({
+                  id: `device_${deviceAlbum.title}`,
+                  name: deviceAlbum.title,
+                  photoCount: deviceAlbum.count || 0,
+                });
+
+                // Get photos from this album
+                try {
+                  const albumPhotos = await CameraRoll.getPhotos({
+                    first: 50,
+                    assetType: "All",
+                    groupName: deviceAlbum.title,
+                    groupTypes: "Album",
+                  });
+
+                  albumPhotos.edges.forEach((edge) => {
+                    const photoId = edge.node.image.uri;
+                    if (!allMatchingPhotos.find((p) => p.uri === photoId)) {
+                      allMatchingPhotos.push({
+                        id: photoId,
+                        uri: photoId,
+                        favorite: false,
+                        date: edge.node.timestamp
+                          ? new Date(edge.node.timestamp * 1000).toISOString()
+                          : undefined,
+                      });
+                    }
+                  });
+                } catch (photoErr) {
+                  console.log("Error getting album photos:", photoErr);
+                }
+              }
+            }
+
+            // Fallback: search all device photos by filename
+            if (allMatchingPhotos.length === 0) {
+              try {
+                const allDevicePhotos = await CameraRoll.getPhotos({
+                  first: 100,
+                  assetType: "All",
+                  groupTypes: "All",
+                });
+
+                allDevicePhotos.edges.forEach((edge) => {
+                  const photoUri = edge.node.image.uri;
+                  const fileName = edge.node.image.filename || "";
+                  if (
+                    photoUri.toLowerCase().includes(searchLower) ||
+                    fileName.toLowerCase().includes(searchLower)
+                  ) {
+                    allMatchingPhotos.push({
+                      id: photoUri,
+                      uri: photoUri,
+                      favorite: false,
+                      date: edge.node.timestamp
+                        ? new Date(edge.node.timestamp * 1000).toISOString()
+                        : undefined,
+                    });
+                  }
+                });
+              } catch (err) {
+                console.log("Error searching all photos:", err);
+              }
+            }
+          }
+        } catch (err) {
+          console.log("Error loading device albums:", err);
+        }
+
+        setResults(allMatchingPhotos);
+        setFilteredAlbums(matchingAlbums);
       } catch (error) {
         console.error("Search error:", error);
         setResults([]);
+        setFilteredAlbums([]);
       }
     } else {
       setResults([]);
+      setFilteredAlbums([]);
       setHasSearched(false);
     }
   }, []);
 
-  const handlePhotoPress = (photoId: string) => {
-    navigation.navigate("Viewer", { photoId });
+  const clearSearch = () => {
+    setQuery("");
+    setResults([]);
+    setFilteredAlbums([]);
+    setHasSearched(false);
   };
 
-  const sections = groupPhotosByDate(hasSearched ? results : allPhotos);
+  const photosToShow = hasSearched ? results : allPhotos;
+  const sections = groupPhotosByDate(photosToShow);
+
+  const handlePhotoPress = (photoId: string) => {
+    const photo = photosToShow.find((p) => p.id === photoId);
+    navigation.navigate("Viewer", { photoId, mediaType: photo?.mediaType });
+  };
 
   return (
     <View style={styles.container}>
+      <Header onMenuPress={() => setDrawerVisible(true)} />
+
       {/* Search input */}
       <View style={styles.searchContainer}>
         <View style={styles.searchInputContainer}>
@@ -152,6 +321,11 @@ export default function SearchScreen() {
             autoCapitalize="none"
             autoCorrect={false}
           />
+          {query.length > 0 && (
+            <Pressable onPress={clearSearch} style={styles.clearButton}>
+              <CloseIcon size={scale(18)} color={light.textSecondary} />
+            </Pressable>
+          )}
         </View>
       </View>
 
@@ -198,44 +372,129 @@ export default function SearchScreen() {
 
       {/* Results */}
       <ScrollView style={styles.scrollView}>
-        {/* All Photos title */}
-        <View style={styles.sectionTitleContainer}>
-          <Text style={styles.sectionTitle}>All Photos</Text>
-        </View>
+        {hasSearched ? (
+          <>
+            {/* Albums section */}
+            {filteredAlbums.length > 0 && (
+              <>
+                <View style={styles.sectionTitleContainer}>
+                  <Text style={styles.sectionTitle}>Albums</Text>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.albumsScrollView}
+                  contentContainerStyle={styles.albumsScrollContent}
+                >
+                  {filteredAlbums.map((album) => (
+                    <Pressable
+                      key={album.id}
+                      style={styles.albumCard}
+                      onPress={() => {
+                        if (album.id === "favorites") {
+                          navigation.navigate("Favorites");
+                        } else if (album.id.startsWith("device_")) {
+                          const albumName = album.id.replace("device_", "");
+                          navigation.navigate("DeviceAlbum", { albumName });
+                        } else {
+                          navigation.navigate("AlbumDetail", { albumId: album.id, albumName: album.name });
+                        }
+                      }}
+                    >
+                      <View style={[
+                        styles.albumCardIcon,
+                        album.id === "favorites" && styles.albumCardIconFavorites,
+                        album.id.startsWith("device_") && styles.albumCardIconDevice
+                      ]}>
+                        {album.id === "favorites" ? (
+                          <HeartCardIcon size={scale(26)} color="#E91E63" />
+                        ) : album.id.startsWith("device_") ? (
+                          <FolderCardIcon size={scale(26)} color="#FF9800" />
+                        ) : (
+                          <AlbumCardIcon size={scale(28)} color={brand.teal} />
+                        )}
+                      </View>
+                      <View style={styles.albumCardInfo}>
+                        <Text style={styles.albumCardName} numberOfLines={1}>
+                          {album.name}
+                        </Text>
+                        <Text style={styles.albumCardCount}>
+                          {album.photoCount} photos
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </>
+            )}
 
-        {sections.length > 0 ? (
-          sections.map((section) => (
-            <View key={section.title}>
-              <View style={styles.dateHeader}>
-                <Text style={styles.dateHeaderText}>{section.title}</Text>
-              </View>
-              <PhotoGridSection
-                photos={section.data}
-                columns={4}
-                onPress={handlePhotoPress}
-                showFavorites={true}
-              />
+            {/* Results count */}
+            <View style={styles.sectionTitleContainer}>
+              <Text style={styles.sectionTitle}>{results.length} results</Text>
             </View>
-          ))
-        ) : hasSearched ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No results found</Text>
-            <Text style={styles.emptySubtext}>
-              Try different keywords or filters
-            </Text>
-          </View>
+
+            {/* Photos grouped by date */}
+            {sections.length > 0 ? (
+              sections.map((section) => (
+                <View key={section.title}>
+                  <View style={styles.dateHeader}>
+                    <Text style={styles.dateHeaderText}>{section.title}</Text>
+                  </View>
+                  <PhotoGridSection
+                    photos={section.data}
+                    columns={3}
+                    onPress={handlePhotoPress}
+                    showFavorites={true}
+                  />
+                </View>
+              ))
+            ) : (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyText}>No results found</Text>
+                <Text style={styles.emptySubtext}>Try different keywords or filters</Text>
+              </View>
+            )}
+          </>
         ) : (
-          <View style={styles.emptyState}>
-            <SearchIcon size={scale(48)} color={light.textTertiary} />
-            <Text style={styles.emptyText}>No photos yet</Text>
-            <Text style={styles.emptySubtext}>
-              Your photos will appear here
-            </Text>
-          </View>
+          <>
+            {/* All Photos title */}
+            <View style={styles.sectionTitleContainer}>
+              <Text style={styles.sectionTitle}>All Photos</Text>
+            </View>
+
+            {sections.length > 0 ? (
+              sections.map((section) => (
+                <View key={section.title}>
+                  <View style={styles.dateHeader}>
+                    <Text style={styles.dateHeaderText}>{section.title}</Text>
+                  </View>
+                  <PhotoGridSection
+                    photos={section.data}
+                    columns={3}
+                    onPress={handlePhotoPress}
+                    showFavorites={true}
+                  />
+                </View>
+              ))
+            ) : (
+              <View style={styles.emptyState}>
+                <SearchIcon size={scale(48)} color={light.textTertiary} />
+                <Text style={styles.emptyText}>No photos yet</Text>
+                <Text style={styles.emptySubtext}>Your photos will appear here</Text>
+              </View>
+            )}
+          </>
         )}
 
         <View style={styles.bottomPadding} />
       </ScrollView>
+
+      <SideDrawer
+        visible={drawerVisible}
+        onClose={() => setDrawerVisible(false)}
+        currentScreen="Search"
+        navigation={navigation}
+      />
     </View>
   );
 }
@@ -265,6 +524,9 @@ const styles = StyleSheet.create({
     fontSize: fontScale(16),
     color: light.textPrimary,
     paddingVertical: scale(12),
+  },
+  clearButton: {
+    padding: scale(4),
   },
   filterChipsRow: {
     flexDirection: "row",
@@ -297,13 +559,14 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
   advancedRow: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: scale(16),
     paddingBottom: scale(12),
   },
   advancedButton: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
     paddingVertical: scale(10),
     paddingHorizontal: scale(14),
     borderRadius: scale(20),
@@ -359,5 +622,51 @@ const styles = StyleSheet.create({
     fontSize: fontScale(14),
     color: light.textSecondary,
     textAlign: "center",
+  },
+  albumsScrollView: {
+    marginBottom: scale(16),
+  },
+  albumsScrollContent: {
+    paddingHorizontal: scale(16),
+    gap: scale(12),
+  },
+  albumCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: light.background,
+    borderRadius: scale(12),
+    borderWidth: 1,
+    borderColor: light.border,
+    paddingVertical: scale(12),
+    paddingHorizontal: scale(14),
+    minWidth: scale(160),
+    gap: scale(12),
+  },
+  albumCardIcon: {
+    width: scale(48),
+    height: scale(48),
+    borderRadius: scale(10),
+    backgroundColor: "rgba(0, 175, 185, 0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  albumCardIconFavorites: {
+    backgroundColor: "rgba(233, 30, 99, 0.1)",
+  },
+  albumCardIconDevice: {
+    backgroundColor: "rgba(255, 152, 0, 0.1)",
+  },
+  albumCardInfo: {
+    flex: 1,
+  },
+  albumCardName: {
+    fontSize: fontScale(15),
+    fontWeight: "600",
+    color: light.textPrimary,
+  },
+  albumCardCount: {
+    fontSize: fontScale(13),
+    color: light.textSecondary,
+    marginTop: scale(2),
   },
 });

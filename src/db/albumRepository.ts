@@ -16,7 +16,31 @@ import { Album } from "../types/album";
 export async function getAllAlbums(): Promise<Album[]> {
   const db = await getDB();
   const results = await db.executeSql(
-    `SELECT * FROM albums ORDER BY name COLLATE NOCASE ASC`
+    `SELECT a.*,
+            (SELECT COUNT(*) FROM album_photos WHERE albumId = a.id) as photoCount
+     FROM albums a
+     ORDER BY name COLLATE NOCASE ASC`
+  );
+
+  const rows = results[0].rows;
+  const albums: Album[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    albums.push(rows.item(i));
+  }
+
+  return albums;
+}
+
+export async function searchAlbums(query: string): Promise<Album[]> {
+  const db = await getDB();
+  const results = await db.executeSql(
+    `SELECT a.*,
+            (SELECT COUNT(*) FROM album_photos WHERE albumId = a.id) as photoCount
+     FROM albums a
+     WHERE a.name LIKE ?
+     ORDER BY name COLLATE NOCASE ASC`,
+    [`%${query}%`]
   );
 
   const rows = results[0].rows;

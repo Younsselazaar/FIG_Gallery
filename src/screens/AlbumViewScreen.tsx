@@ -12,6 +12,7 @@ import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import Svg, { Path, Rect, Circle } from "react-native-svg";
 
 import { PhotoGridSection, PhotoItem } from "../components/PhotoGrid";
+import JumpToDateModal from "../components/JumpToDateModal";
 
 import {
   getAlbumById,
@@ -19,6 +20,7 @@ import {
   removePhotoFromAlbum,
 } from "../db/albumRepository";
 import { getPhotoById } from "../db/photoRepository";
+import { requestMediaPermission } from "../services/mediaScanner";
 
 import { light, brand } from "../theme/colors";
 import { scale, fontScale } from "../theme/responsive";
@@ -118,6 +120,15 @@ function TrashIcon({ size = 20, color = "#E53935" }: { size?: number; color?: st
   );
 }
 
+function CalendarIcon({ size = 20, color = light.textSecondary }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="3" y="4" width="18" height="18" rx="2" stroke={color} strokeWidth="2" />
+      <Path d="M16 2V6M8 2V6M3 10H21" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 type RouteParams = {
   albumId: string;
   albumName?: string;
@@ -139,6 +150,13 @@ export default function AlbumViewScreen() {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPhotos, setSelectedPhotos] = useState<string[]>([]);
 
+  // Date filter state
+  const [jumpToDateVisible, setJumpToDateVisible] = useState(false);
+  const [dateFilterActive, setDateFilterActive] = useState(false);
+  const [filteredDate, setFilteredDate] = useState<Date | null>(null);
+  const [dateFilterMode, setDateFilterMode] = useState<"day" | "week">("day");
+  const [dateFilteredPhotos, setDateFilteredPhotos] = useState<PhotoItem[]>([]);
+
   const toggleGridView = () => setGridColumns((prev) => (prev === 4 ? 5 : 4));
 
   useEffect(() => {
@@ -148,7 +166,10 @@ export default function AlbumViewScreen() {
   const loadAlbum = async () => {
     setLoading(true);
 
-    if (isDevice && groupName) {
+    if (albumId === "all_videos") {
+      // Load all videos from device
+      await loadAllVideos();
+    } else if (isDevice && groupName) {
       // Load photos from device album using CameraRoll
       await loadDeviceAlbumPhotos(groupName);
     } else {
@@ -157,6 +178,44 @@ export default function AlbumViewScreen() {
     }
 
     setLoading(false);
+  };
+
+  const loadAllVideos = async () => {
+    try {
+      setTitle("Videos");
+
+      let allVideos: PhotoItem[] = [];
+      let hasMore = true;
+      let endCursor: string | undefined;
+
+      while (hasMore) {
+        const result = await CameraRoll.getPhotos({
+          first: 100,
+          after: endCursor,
+          assetType: "Videos",
+          groupTypes: "All",
+          include: ["filename", "fileSize", "imageSize", "playableDuration"],
+        });
+
+        for (const edge of result.edges) {
+          const node = edge.node;
+          allVideos.push({
+            id: node.image.uri,
+            uri: node.image.uri,
+            mediaType: "video",
+            duration: node.image.playableDuration || undefined,
+          });
+        }
+
+        hasMore = result.page_info.has_next_page;
+        endCursor = result.page_info.end_cursor;
+      }
+
+      setPhotos(allVideos);
+    } catch (err) {
+      console.error("Error loading videos:", err);
+      setPhotos([]);
+    }
   };
 
   const loadDeviceAlbumPhotos = async (albumGroupName: string) => {
@@ -172,15 +231,18 @@ export default function AlbumViewScreen() {
           first: 100,
           after: endCursor,
           groupName: albumGroupName,
-          assetType: "Photos",
-          include: ["filename", "fileSize", "imageSize"],
+          assetType: "All",
+          include: ["filename", "fileSize", "imageSize", "playableDuration"],
         });
 
         for (const edge of result.edges) {
           const node = edge.node;
+          const isVideo = node.type?.includes("video") || false;
           allPhotos.push({
             id: node.image.uri,
             uri: node.image.uri,
+            mediaType: isVideo ? "video" : "photo",
+            duration: node.image.playableDuration || undefined,
           });
         }
 
@@ -232,7 +294,8 @@ export default function AlbumViewScreen() {
         prev.includes(photoId) ? prev.filter((id) => id !== photoId) : [...prev, photoId]
       );
     } else {
-      navigation.navigate("Viewer", { photoId, photoUri: photoId });
+      const photo = photos.find((p) => p.id === photoId);
+      navigation.navigate("Viewer", { photoId, mediaType: photo?.mediaType });
     }
   };
 
@@ -253,6 +316,94 @@ export default function AlbumViewScreen() {
     setMenuVisible(false);
   };
 
+  // Handle Jump to Date selection
+  const handleJumpToDate = async (date: Date, mode: "day" | "week") => {
+    setFilteredDate(date);
+    setDateFilterMode(mode);
+    setDateFilterActive(true);
+
+    try {
+      const hasPermission = await requestMediaPermission();
+      if (!hasPermission) {
+        console.log("No permission for date filter");
+        setDateFilteredPhotos([]);
+        return;
+      }
+
+      let startDate: Date;
+      let endDate: Date;
+
+      if (mode === "day") {
+        startDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+        endDate = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+      } else {
+        const dayOfWeek = date.getDay();
+        startDate = new Date(date);
+        startDate.setDate(date.getDate() - dayOfWeek);
+        startDate.setHours(0, 0, 0, 0);
+        endDate = new Date(startDate);
+        endDate.setDate(startDate.getDate() + 6);
+        endDate.setHours(23, 59, 59, 999);
+      }
+
+      const startTimestamp = Math.floor(startDate.getTime() / 1000);
+      const endTimestamp = Math.floor(endDate.getTime() / 1000);
+
+      // For device albums, get photos with timestamps
+      if (isDevice && groupName) {
+        const result = await CameraRoll.getPhotos({
+          first: 5000,
+          assetType: "All",
+          groupName: groupName,
+        });
+
+        const filtered: PhotoItem[] = [];
+        for (const edge of result.edges) {
+          const ts = edge.node.timestamp;
+          if (ts && ts >= startTimestamp && ts <= endTimestamp) {
+            filtered.push({
+              id: edge.node.image.uri,
+              uri: edge.node.image.uri,
+              date: new Date(ts * 1000).toISOString(),
+            });
+          }
+        }
+        setDateFilteredPhotos(filtered);
+      } else {
+        // For custom albums, filter from current photos list
+        // Note: Custom album photos may not have timestamps
+        setDateFilteredPhotos(photos);
+      }
+
+      console.log(`Album date filter: found ${dateFilteredPhotos.length} photos`);
+    } catch (error) {
+      console.error("Error filtering by date:", error);
+      setDateFilteredPhotos([]);
+    }
+  };
+
+  const clearDateFilter = () => {
+    setDateFilterActive(false);
+    setFilteredDate(null);
+    setDateFilteredPhotos([]);
+  };
+
+  const formatDateRange = () => {
+    if (!filteredDate) return "";
+    if (dateFilterMode === "day") {
+      return filteredDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    } else {
+      const dayOfWeek = filteredDate.getDay();
+      const start = new Date(filteredDate);
+      start.setDate(filteredDate.getDate() - dayOfWeek);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      return `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    }
+  };
+
+  const displayPhotos = dateFilterActive ? dateFilteredPhotos : photos;
+
   return (
     <View style={styles.container}>
       {/* Title bar like HomeScreen */}
@@ -261,9 +412,13 @@ export default function AlbumViewScreen() {
           <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
             <BackIcon size={scale(24)} color={light.textPrimary} />
           </Pressable>
-          <View>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.subtitle}>{photos.length} photos</Text>
+          <View style={styles.titleTextContainer}>
+            <Text style={styles.title}>{dateFilterActive ? "Filtered" : title}</Text>
+            <Text style={styles.subtitle}>
+              {dateFilterActive
+                ? `${dateFilteredPhotos.length} photos • ${formatDateRange()}`
+                : `${photos.length} photos`}
+            </Text>
           </View>
         </View>
         <View style={styles.titleActions}>
@@ -275,6 +430,15 @@ export default function AlbumViewScreen() {
               <Text style={styles.selectedText}>{selectedPhotos.length} selected</Text>
               <Pressable style={styles.moreButtonTeal} onPress={() => setMenuVisible(!menuVisible)}>
                 <MoreIcon size={scale(18)} color="white" />
+              </Pressable>
+            </>
+          ) : dateFilterActive ? (
+            <>
+              <Pressable style={styles.clearFilterButton} onPress={clearDateFilter}>
+                <Text style={styles.clearFilterText}>Clear</Text>
+              </Pressable>
+              <Pressable style={styles.iconButton} onPress={() => setMenuVisible(!menuVisible)}>
+                <MoreIcon size={scale(18)} color={light.textPrimary} />
               </Pressable>
             </>
           ) : (
@@ -325,6 +489,10 @@ export default function AlbumViewScreen() {
                     <SelectIcon size={scale(20)} />
                     <Text style={styles.menuItemText}>Select All</Text>
                   </Pressable>
+                  <Pressable style={styles.menuItem} onPress={() => { setMenuVisible(false); setJumpToDateVisible(true); }}>
+                    <CalendarIcon size={scale(20)} />
+                    <Text style={styles.menuItemText}>Jump to Date</Text>
+                  </Pressable>
                 </>
               )}
             </View>
@@ -337,16 +505,31 @@ export default function AlbumViewScreen() {
         style={styles.scrollView}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <PhotoGridSection
-          photos={photos}
-          columns={gridColumns}
-          onPress={handlePhotoPress}
-          showFavorites={true}
-          selectionMode={selectionMode}
-          selectedIds={new Set(selectedPhotos)}
-        />
+        {displayPhotos.length > 0 ? (
+          <PhotoGridSection
+            photos={displayPhotos}
+            columns={gridColumns}
+            onPress={handlePhotoPress}
+            showFavorites={true}
+            selectionMode={selectionMode}
+            selectedIds={new Set(selectedPhotos)}
+          />
+        ) : dateFilterActive ? (
+          <View style={styles.emptyState}>
+            <CalendarIcon size={scale(48)} color={light.textTertiary} />
+            <Text style={styles.emptyTitle}>No photos found</Text>
+            <Text style={styles.emptySubtitle}>No photos from {formatDateRange()}</Text>
+          </View>
+        ) : null}
         <View style={styles.bottomPadding} />
       </ScrollView>
+
+      {/* Jump to Date Modal */}
+      <JumpToDateModal
+        visible={jumpToDateVisible}
+        onClose={() => setJumpToDateVisible(false)}
+        onSelectDate={handleJumpToDate}
+      />
     </View>
   );
 }
@@ -460,5 +643,38 @@ const styles = StyleSheet.create({
   },
   menuItemTextDelete: {
     color: "#E53935",
+  },
+  titleTextContainer: {
+    flex: 1,
+  },
+  clearFilterButton: {
+    paddingVertical: scale(8),
+    paddingHorizontal: scale(16),
+    borderRadius: scale(20),
+    backgroundColor: brand.teal,
+  },
+  clearFilterText: {
+    fontSize: fontScale(14),
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingTop: scale(100),
+    paddingHorizontal: scale(24),
+  },
+  emptyTitle: {
+    fontSize: fontScale(18),
+    fontWeight: "600",
+    color: light.textPrimary,
+    marginTop: scale(16),
+  },
+  emptySubtitle: {
+    fontSize: fontScale(14),
+    color: light.textSecondary,
+    marginTop: scale(8),
+    textAlign: "center",
   },
 });

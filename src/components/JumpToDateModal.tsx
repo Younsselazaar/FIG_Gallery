@@ -17,7 +17,7 @@ const SCREEN_WIDTH = Dimensions.get("window").width;
 type Props = {
   visible: boolean;
   onClose: () => void;
-  onSelectDate: (date: Date) => void;
+  onSelectDate: (date: Date, mode: "day" | "week") => void;
 };
 
 type SelectionMode = "day" | "week";
@@ -118,7 +118,7 @@ export default function JumpToDateModal({ visible, onClose, onSelectDate }: Prop
       return; // Don't select dates from other months
     }
     setSelectedDate(date);
-    onSelectDate(date);
+    onSelectDate(date, selectionMode);
     onClose();
   };
 

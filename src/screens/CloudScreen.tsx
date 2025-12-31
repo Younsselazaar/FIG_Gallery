@@ -1,8 +1,10 @@
-import React from "react";
+import React, { useState } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
+import { useNavigation } from "@react-navigation/native";
 import Svg, { Path } from "react-native-svg";
 
 import Header from "../components/Header";
+import SideDrawer from "../components/SideDrawer";
 import { light, brand } from "../theme/colors";
 import { spacing, radius } from "../theme/tokens";
 import { scale, fontScale, verticalScale } from "../theme/responsive";
@@ -28,9 +30,12 @@ function CloudIcon({ size = 64, color = light.textTertiary }: { size?: number; c
 }
 
 export default function CloudScreen() {
+  const navigation = useNavigation<any>();
+  const [drawerVisible, setDrawerVisible] = useState(false);
+
   return (
     <View style={styles.container}>
-      <Header onMenuPress={() => {}} />
+      <Header onMenuPress={() => setDrawerVisible(true)} />
 
       <View style={styles.titleBar}>
         <Text style={styles.title}>Cloud</Text>
@@ -70,6 +75,13 @@ export default function CloudScreen() {
           <Text style={styles.setupButtonText}>Set Up Cloud Backup</Text>
         </Pressable>
       </View>
+
+      <SideDrawer
+        visible={drawerVisible}
+        onClose={() => setDrawerVisible(false)}
+        currentScreen="Cloud"
+        navigation={navigation}
+      />
     </View>
   );
 }

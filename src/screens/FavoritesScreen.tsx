@@ -10,6 +10,7 @@ import {
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 
 import Header from "../components/Header";
+import SideDrawer from "../components/SideDrawer";
 import { PhotoGridSection, PhotoItem, PhotoSection } from "../components/PhotoGrid";
 
 import { getFavoritePhotos } from "../db/photoRepository";
@@ -66,6 +67,7 @@ export default function FavoritesScreen() {
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [drawerVisible, setDrawerVisible] = useState(false);
 
   const loadPhotos = useCallback(async () => {
     try {
@@ -106,7 +108,7 @@ export default function FavoritesScreen() {
 
   return (
     <View style={styles.container}>
-      <Header onMenuPress={() => {}} />
+      <Header onMenuPress={() => setDrawerVisible(true)} />
 
       <View style={styles.titleBar}>
         <View>
@@ -148,6 +150,13 @@ export default function FavoritesScreen() {
         )}
         <View style={styles.bottomPadding} />
       </ScrollView>
+
+      <SideDrawer
+        visible={drawerVisible}
+        onClose={() => setDrawerVisible(false)}
+        currentScreen="Favorites"
+        navigation={navigation}
+      />
     </View>
   );
 }

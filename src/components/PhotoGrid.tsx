@@ -28,6 +28,8 @@ export type PhotoItem = {
   uri: string;
   favorite?: boolean;
   date?: string;
+  mediaType?: "photo" | "video";
+  duration?: number;
 };
 
 export type PhotoSection = {
@@ -62,6 +64,23 @@ function HeartIcon({ size = 18, filled = false }: { size?: number; filled?: bool
       />
     </Svg>
   );
+}
+
+// Play icon for videos
+function PlayIcon({ size = 24 }: { size?: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Circle cx="12" cy="12" r="11" fill="rgba(0,0,0,0.5)" />
+      <Path d="M9.5 7.5V16.5L16.5 12L9.5 7.5Z" fill="white" />
+    </Svg>
+  );
+}
+
+// Format video duration
+function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 // Selection circle - matches FIG Gallery design
@@ -111,6 +130,8 @@ function PhotoGridItem({
   const iconSize = compact ? scale(16) : scale(18);
   const iconPadding = compact ? scale(3) : scale(4);
   const iconOffset = compact ? scale(6) : scale(8);
+  const isVideo = item.mediaType === "video";
+  const playIconSize = compact ? scale(22) : scale(28);
 
   return (
     <Pressable
@@ -127,6 +148,20 @@ function PhotoGridItem({
         style={styles.image}
         resizeMode="cover"
       />
+
+      {/* Video play icon - center */}
+      {isVideo && (
+        <View style={styles.videoOverlay}>
+          <PlayIcon size={playIconSize} />
+        </View>
+      )}
+
+      {/* Video duration - bottom left */}
+      {isVideo && item.duration && (
+        <View style={[styles.durationBadge, { bottom: iconOffset, left: iconOffset }]}>
+          <Text style={styles.durationText}>{formatDuration(item.duration)}</Text>
+        </View>
+      )}
 
       {/* Favorite heart icon */}
       {showFavorite && item.favorite && (
@@ -339,5 +374,22 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     justifyContent: "flex-start",
+  },
+  videoOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  durationBadge: {
+    position: "absolute",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    paddingHorizontal: scale(4),
+    paddingVertical: scale(2),
+    borderRadius: scale(4),
+  },
+  durationText: {
+    color: "#FFFFFF",
+    fontSize: fontScale(10),
+    fontWeight: "600",
   },
 });
