@@ -13,13 +13,17 @@ import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import { requestMediaPermission } from "../services/mediaScanner";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Svg, { Path, Rect, Circle } from "react-native-svg";
+import Share from "react-native-share";
+import RNFS from "react-native-fs";
 
 import Header from "../components/Header";
 import { PhotoGridSection, PhotoItem, PhotoSection } from "../components/PhotoGrid";
 import JumpToDateModal from "../components/JumpToDateModal";
 import SideDrawer from "../components/SideDrawer";
 
-import { getAllPhotos, trashPhoto, cleanupStalePhotos } from "../db/photoRepository";
+import { getAllPhotos, trashPhoto, cleanupStalePhotos, markFavorite } from "../db/photoRepository";
+import AddToAlbumModal from "../components/AddToAlbumModal";
+import { addPhotoToAlbum } from "../db/albumRepository";
 import { light, brand, ui, semantic } from "../theme/colors";
 import { scale, fontScale } from "../theme/responsive";
 
@@ -160,6 +164,7 @@ export default function HomeScreen() {
   const [selectedPhotos, setSelectedPhotos] = useState<string[]>([]);
   const [jumpToDateVisible, setJumpToDateVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [addToAlbumVisible, setAddToAlbumVisible] = useState(false);
 
   // Date filter state
   const [dateFilterActive, setDateFilterActive] = useState(false);
@@ -378,6 +383,81 @@ export default function HomeScreen() {
     setMenuVisible(false);
   };
 
+  const handleShareSelected = async () => {
+    if (selectedPhotos.length === 0) return;
+    setMenuVisible(false);
+
+    try {
+      // Get URIs of selected photos
+      const selectedItems = displayPhotos.filter((p) => selectedPhotos.includes(p.id));
+      const shareUrls: string[] = [];
+
+      for (const item of selectedItems) {
+        // Copy each file to temp location for sharing
+        const timestamp = Date.now();
+        const isVideo = item.mediaType === "video";
+        const extension = isVideo ? "mp4" : "jpg";
+        const tempPath = `${RNFS.CachesDirectoryPath}/share_${timestamp}_${Math.random().toString(36).substr(2, 9)}.${extension}`;
+
+        try {
+          const base64Data = await RNFS.readFile(item.uri, "base64");
+          await RNFS.writeFile(tempPath, base64Data, "base64");
+          shareUrls.push(`file://${tempPath}`);
+        } catch (err) {
+          console.log("Error copying file for share:", err);
+        }
+      }
+
+      if (shareUrls.length === 0) {
+        Alert.alert("Error", "Could not prepare files for sharing");
+        return;
+      }
+
+      // Share multiple files
+      await Share.open({
+        urls: shareUrls,
+        type: "image/*",
+      });
+
+      // Clean up temp files after delay
+      setTimeout(() => {
+        shareUrls.forEach((url) => {
+          const path = url.replace("file://", "");
+          RNFS.unlink(path).catch(() => {});
+        });
+      }, 5000);
+    } catch (error: any) {
+      if (error?.message?.includes("User did not share")) {
+        return;
+      }
+      console.error("Share error:", error);
+      Alert.alert("Error", "Could not share files");
+    }
+  };
+
+  const handleAddToFavorites = async () => {
+    if (selectedPhotos.length === 0) return;
+    setMenuVisible(false);
+
+    try {
+      for (const photoId of selectedPhotos) {
+        await markFavorite(photoId, true);
+      }
+      Alert.alert("Success", `${selectedPhotos.length} photo${selectedPhotos.length > 1 ? "s" : ""} added to favorites`);
+      exitSelectionMode();
+      loadPhotos();
+    } catch (error) {
+      console.error("Error adding to favorites:", error);
+      Alert.alert("Error", "Failed to add to favorites");
+    }
+  };
+
+  const handleAddToAlbum = () => {
+    if (selectedPhotos.length === 0) return;
+    setMenuVisible(false);
+    setAddToAlbumVisible(true);
+  };
+
   return (
     <View style={styles.container}>
       <Header onMenuPress={() => setDrawerVisible(true)} />
@@ -434,15 +514,15 @@ export default function HomeScreen() {
             <View style={styles.menuDropdown}>
             {selectionMode ? (
               <>
-                <Pressable style={styles.menuItem} onPress={() => { setMenuVisible(false); }}>
+                <Pressable style={styles.menuItem} onPress={handleShareSelected}>
                   <ShareIcon size={scale(20)} />
                   <Text style={styles.menuItemText}>Share</Text>
                 </Pressable>
-                <Pressable style={styles.menuItem} onPress={() => { setMenuVisible(false); }}>
+                <Pressable style={styles.menuItem} onPress={handleAddToAlbum}>
                   <AddAlbumIcon size={scale(20)} />
                   <Text style={styles.menuItemText}>Add to Album</Text>
                 </Pressable>
-                <Pressable style={styles.menuItem} onPress={() => { setMenuVisible(false); }}>
+                <Pressable style={styles.menuItem} onPress={handleAddToFavorites}>
                   <HeartIcon size={scale(20)} />
                   <Text style={styles.menuItemText}>Add to Favorites</Text>
                 </Pressable>
@@ -503,6 +583,32 @@ export default function HomeScreen() {
         onClose={() => setDrawerVisible(false)}
         currentScreen="Home"
         navigation={navigation}
+      />
+
+      {/* Add to Album Modal */}
+      <AddToAlbumModal
+        visible={addToAlbumVisible}
+        onClose={() => setAddToAlbumVisible(false)}
+        onSelectAlbum={async (albumId, albumName, isDeviceAlbum, deviceAlbumName) => {
+          try {
+            for (const photoId of selectedPhotos) {
+              if (isDeviceAlbum && deviceAlbumName) {
+                // For device albums, we'd need to copy the file
+                // For now just add to custom album
+                await addPhotoToAlbum(albumId, photoId);
+              } else {
+                await addPhotoToAlbum(albumId, photoId);
+              }
+            }
+            Alert.alert("Success", `${selectedPhotos.length} photo${selectedPhotos.length > 1 ? "s" : ""} added to ${albumName}`);
+            setAddToAlbumVisible(false);
+            exitSelectionMode();
+          } catch (error) {
+            console.error("Error adding to album:", error);
+            Alert.alert("Error", "Failed to add photos to album");
+          }
+        }}
+        photoId={selectedPhotos[0]}
       />
     </View>
   );

@@ -13,31 +13,59 @@ import { getDB } from "../db/database";
  * - Database sync
  */
 
+// Helper to wait for a short time
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export async function requestMediaPermission(): Promise<boolean> {
   if (Platform.OS !== "android") {
     return true;
   }
 
   try {
-    // Android 13+ uses READ_MEDIA_IMAGES
+    // Android 13+ uses READ_MEDIA_IMAGES and READ_MEDIA_VIDEO
     if (Platform.Version >= 33) {
-      const granted = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-        {
-          title: "Photo Access Required",
-          message: "Gallery needs access to your photos to display them.",
-          buttonPositive: "Allow",
-          buttonNegative: "Deny",
-        }
+      // First check if already granted
+      const imagesAlreadyGranted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES
       );
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
+      const videosAlreadyGranted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO
+      );
+
+      if (imagesAlreadyGranted || videosAlreadyGranted) {
+        return true;
+      }
+
+      // Wait a bit for Activity to be fully ready before requesting
+      await delay(500);
+
+      const permissions = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
+        PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
+      ]);
+
+      const imagesGranted = permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES] === PermissionsAndroid.RESULTS.GRANTED;
+      const videosGranted = permissions[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] === PermissionsAndroid.RESULTS.GRANTED;
+
+      return imagesGranted || videosGranted;
     } else {
-      // Android 12 and below
+      // Android 12 and below - first check if already granted
+      const alreadyGranted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE
+      );
+
+      if (alreadyGranted) {
+        return true;
+      }
+
+      // Wait a bit for Activity to be fully ready before requesting
+      await delay(500);
+
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
         {
           title: "Storage Access Required",
-          message: "Gallery needs access to your photos to display them.",
+          message: "Gallery needs access to your photos and videos to display them.",
           buttonPositive: "Allow",
           buttonNegative: "Deny",
         }

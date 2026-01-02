@@ -144,17 +144,57 @@ export default function SearchScreen() {
     loadAllPhotos();
   }, []);
 
+  const isVideoFile = (uri: string, mimeType?: string): boolean => {
+    // Check mime type first if available
+    if (mimeType && mimeType.startsWith('video/')) {
+      return true;
+    }
+    // Check file extension
+    const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.3gp', '.m4v'];
+    const lowerUri = uri.toLowerCase();
+    return videoExtensions.some(ext => lowerUri.includes(ext));
+  };
+
   const loadAllPhotos = async () => {
     try {
-      const photos = await getAllPhotos();
-      setAllPhotos(
-        photos.map((p: any) => ({
-          id: p.id,
-          uri: p.uri,
-          favorite: p.favorite === 1,
-          date: p.createdAt ? new Date(p.createdAt).toISOString() : undefined,
-        }))
-      );
+      // Load directly from CameraRoll for accurate video detection
+      const hasPermission = await requestMediaPermission();
+      if (!hasPermission) {
+        console.log("No permission to load photos");
+        return;
+      }
+
+      const result = await CameraRoll.getPhotos({
+        first: 500,
+        assetType: "All",
+        groupTypes: "All",
+        include: ["filename", "playableDuration"],
+      });
+
+      const mediaItems = result.edges.map((edge) => {
+        const photoUri = edge.node.image.uri;
+        const fileName = edge.node.image.filename || "";
+        const nodeType = edge.node.type || "";
+        const playableDuration = edge.node.image.playableDuration;
+
+        // Determine if it's a video
+        const isVideo = nodeType.startsWith("video") ||
+                       (playableDuration && playableDuration > 0) ||
+                       isVideoFile(photoUri) ||
+                       isVideoFile(fileName);
+
+        return {
+          id: photoUri,
+          uri: photoUri,
+          favorite: false,
+          date: edge.node.timestamp
+            ? new Date(edge.node.timestamp * 1000).toISOString()
+            : undefined,
+          mediaType: isVideo ? "video" : "photo",
+        };
+      });
+
+      setAllPhotos(mediaItems);
     } catch (error) {
       console.error("Error loading photos:", error);
     }
@@ -169,14 +209,12 @@ export default function SearchScreen() {
         const matchingAlbums: Album[] = [];
         let allMatchingPhotos: PhotoItem[] = [];
 
-        // Search photos from database
-        const dbPhotos = await searchPhotos(text);
-        allMatchingPhotos = dbPhotos.map((p: any) => ({
-          id: p.id,
-          uri: p.uri,
-          favorite: p.favorite === 1,
-          date: p.createdAt ? new Date(p.createdAt).toISOString() : undefined,
-        }));
+        // Search directly from allPhotos (which has correct mediaType)
+        const matchingFromAll = allPhotos.filter(p => {
+          const uri = p.uri.toLowerCase();
+          return uri.includes(searchLower);
+        });
+        allMatchingPhotos = [...matchingFromAll];
 
         // Check if "Favorites" matches
         if ("favorites".includes(searchLower)) {
@@ -231,6 +269,7 @@ export default function SearchScreen() {
                         date: edge.node.timestamp
                           ? new Date(edge.node.timestamp * 1000).toISOString()
                           : undefined,
+                        mediaType: isVideoFile(photoId) ? "video" : "photo",
                       });
                     }
                   });
@@ -240,22 +279,34 @@ export default function SearchScreen() {
               }
             }
 
-            // Fallback: search all device photos by filename
-            if (allMatchingPhotos.length === 0) {
-              try {
-                const allDevicePhotos = await CameraRoll.getPhotos({
-                  first: 100,
-                  assetType: "All",
-                  groupTypes: "All",
-                });
+            // Always search all device photos/videos by filename
+            try {
+              const allDevicePhotos = await CameraRoll.getPhotos({
+                first: 200,
+                assetType: "All",
+                groupTypes: "All",
+                include: ["filename", "playableDuration"],
+              });
 
-                allDevicePhotos.edges.forEach((edge) => {
-                  const photoUri = edge.node.image.uri;
-                  const fileName = edge.node.image.filename || "";
-                  if (
-                    photoUri.toLowerCase().includes(searchLower) ||
-                    fileName.toLowerCase().includes(searchLower)
-                  ) {
+              allDevicePhotos.edges.forEach((edge) => {
+                const photoUri = edge.node.image.uri;
+                const fileName = edge.node.image.filename || "";
+                const nodeType = edge.node.type || "";
+                const playableDuration = edge.node.image.playableDuration;
+
+                // Determine if it's a video: check type, playableDuration, or filename
+                const isVideo = nodeType.startsWith("video") ||
+                               (playableDuration && playableDuration > 0) ||
+                               isVideoFile(photoUri) ||
+                               isVideoFile(fileName);
+
+                // Check if filename or URI contains search term
+                if (
+                  photoUri.toLowerCase().includes(searchLower) ||
+                  fileName.toLowerCase().includes(searchLower)
+                ) {
+                  // Only add if not already in results
+                  if (!allMatchingPhotos.find((p) => p.uri === photoUri)) {
                     allMatchingPhotos.push({
                       id: photoUri,
                       uri: photoUri,
@@ -263,12 +314,13 @@ export default function SearchScreen() {
                       date: edge.node.timestamp
                         ? new Date(edge.node.timestamp * 1000).toISOString()
                         : undefined,
+                      mediaType: isVideo ? "video" : "photo",
                     });
                   }
-                });
-              } catch (err) {
-                console.log("Error searching all photos:", err);
-              }
+                }
+              });
+            } catch (err) {
+              console.log("Error searching all photos:", err);
             }
           }
         } catch (err) {
@@ -287,7 +339,7 @@ export default function SearchScreen() {
       setFilteredAlbums([]);
       setHasSearched(false);
     }
-  }, []);
+  }, [allPhotos]);
 
   const clearSearch = () => {
     setQuery("");
@@ -296,7 +348,15 @@ export default function SearchScreen() {
     setHasSearched(false);
   };
 
-  const photosToShow = hasSearched ? results : allPhotos;
+  // Apply filter to photos
+  const applyFilter = (photos: PhotoItem[]): PhotoItem[] => {
+    if (filter === "all") return photos;
+    if (filter === "photos") return photos.filter(p => p.mediaType !== "video");
+    if (filter === "videos") return photos.filter(p => p.mediaType === "video");
+    return photos;
+  };
+
+  const photosToShow = applyFilter(hasSearched ? results : allPhotos);
   const sections = groupPhotosByDate(photosToShow);
 
   const handlePhotoPress = (photoId: string) => {
@@ -430,7 +490,9 @@ export default function SearchScreen() {
 
             {/* Results count */}
             <View style={styles.sectionTitleContainer}>
-              <Text style={styles.sectionTitle}>{results.length} results</Text>
+              <Text style={styles.sectionTitle}>
+                {photosToShow.length} {filter === "videos" ? "videos" : filter === "photos" ? "photos" : "results"}
+              </Text>
             </View>
 
             {/* Photos grouped by date */}
@@ -450,16 +512,20 @@ export default function SearchScreen() {
               ))
             ) : (
               <View style={styles.emptyState}>
-                <Text style={styles.emptyText}>No results found</Text>
+                <Text style={styles.emptyText}>
+                  {filter === "videos" ? "No videos found" : filter === "photos" ? "No photos found" : "No results found"}
+                </Text>
                 <Text style={styles.emptySubtext}>Try different keywords or filters</Text>
               </View>
             )}
           </>
         ) : (
           <>
-            {/* All Photos title */}
+            {/* All Photos/Videos title */}
             <View style={styles.sectionTitleContainer}>
-              <Text style={styles.sectionTitle}>All Photos</Text>
+              <Text style={styles.sectionTitle}>
+                {filter === "videos" ? "All Videos" : filter === "photos" ? "All Photos" : "All Media"}
+              </Text>
             </View>
 
             {sections.length > 0 ? (
@@ -479,8 +545,12 @@ export default function SearchScreen() {
             ) : (
               <View style={styles.emptyState}>
                 <SearchIcon size={scale(48)} color={light.textTertiary} />
-                <Text style={styles.emptyText}>No photos yet</Text>
-                <Text style={styles.emptySubtext}>Your photos will appear here</Text>
+                <Text style={styles.emptyText}>
+                  {filter === "videos" ? "No videos yet" : filter === "photos" ? "No photos yet" : "No media yet"}
+                </Text>
+                <Text style={styles.emptySubtext}>
+                  {filter === "videos" ? "Your videos will appear here" : filter === "photos" ? "Your photos will appear here" : "Your media will appear here"}
+                </Text>
               </View>
             )}
           </>

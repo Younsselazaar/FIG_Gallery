@@ -26,8 +26,11 @@ import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 
 import { getPhotoById, insertPhoto } from "../db/photoRepository";
 import { addEdit } from "../db/editRepository";
+import { scale, fontScale, verticalScale } from "../theme/responsive";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
+const SCREEN_HEIGHT = Dimensions.get("window").height;
+const isSmallScreen = SCREEN_HEIGHT < 700;
 
 type RouteParams = {
   photoId: string;
@@ -214,9 +217,10 @@ interface ThickSliderProps {
 }
 
 function ThickSlider({ icon, value, onChange }: ThickSliderProps) {
-  const sliderWidth = SCREEN_WIDTH - 100; // Account for icon and value
-  const thumbSize = 22;
-  const trackHeight = 6;
+  const sliderWidth = SCREEN_WIDTH - scale(isSmallScreen ? 80 : 100); // Account for icon and value
+  const thumbSize = isSmallScreen ? scale(14) : scale(18);
+  const trackHeight = isSmallScreen ? scale(4) : scale(5);
+  const containerHeight = isSmallScreen ? verticalScale(24) : verticalScale(28);
 
   // Convert value (-100 to 100) to position (0 to sliderWidth)
   const valueToPosition = (val: number) => ((val + 100) / 200) * sliderWidth;
@@ -265,7 +269,7 @@ function ThickSlider({ icon, value, onChange }: ThickSliderProps) {
               height: thumbSize,
               borderRadius: thumbSize / 2,
               left: thumbPosition - thumbSize / 2,
-              top: (30 - thumbSize) / 2,
+              top: (containerHeight - thumbSize) / 2,
             }
           ]}
         />
@@ -558,23 +562,25 @@ export default function EditorScreen() {
     );
   }, [photo, exposureAmount, brightnessAmount, highlightsAmount, contrastAmount, shadowsAmount, saturationAmount, temperatureMatrix, currentFilterMatrix]);
 
+  const iconSize = isSmallScreen ? 16 : 20;
+
   const renderAdjustPanel = () => (
     <ScrollView style={styles.adjustPanel} showsVerticalScrollIndicator={false}>
       <Text style={styles.sectionTitle}>LIGHT</Text>
-      <ThickSlider icon={<ExposureIcon size={20} />} value={exposure} onChange={setExposure} />
-      <ThickSlider icon={<BrightnessIcon size={20} />} value={brightness} onChange={setBrightness} />
-      <ThickSlider icon={<ContrastIcon size={20} />} value={contrast} onChange={setContrast} />
-      <ThickSlider icon={<HighlightsIcon size={20} />} value={highlights} onChange={setHighlights} />
-      <ThickSlider icon={<ShadowsIcon size={20} />} value={shadows} onChange={setShadows} />
+      <ThickSlider icon={<ExposureIcon size={iconSize} />} value={exposure} onChange={setExposure} />
+      <ThickSlider icon={<BrightnessIcon size={iconSize} />} value={brightness} onChange={setBrightness} />
+      <ThickSlider icon={<ContrastIcon size={iconSize} />} value={contrast} onChange={setContrast} />
+      <ThickSlider icon={<HighlightsIcon size={iconSize} />} value={highlights} onChange={setHighlights} />
+      <ThickSlider icon={<ShadowsIcon size={iconSize} />} value={shadows} onChange={setShadows} />
 
       <Text style={styles.sectionTitle}>COLOR</Text>
-      <ThickSlider icon={<SaturationIcon size={20} />} value={saturation} onChange={setSaturation} />
-      <ThickSlider icon={<TemperatureIcon size={20} />} value={temperature} onChange={setTemperature} />
+      <ThickSlider icon={<SaturationIcon size={iconSize} />} value={saturation} onChange={setSaturation} />
+      <ThickSlider icon={<TemperatureIcon size={iconSize} />} value={temperature} onChange={setTemperature} />
 
       <Text style={styles.sectionTitle}>DETAIL</Text>
-      <ThickSlider icon={<SharpnessIcon size={20} />} value={sharpness} onChange={setSharpness} />
+      <ThickSlider icon={<SharpnessIcon size={iconSize} />} value={sharpness} onChange={setSharpness} />
 
-      <View style={{ height: 100 }} />
+      <View style={{ height: isSmallScreen ? verticalScale(40) : verticalScale(80) }} />
     </ScrollView>
   );
 
@@ -961,43 +967,43 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    paddingTop: 40,
+    paddingHorizontal: scale(10),
+    paddingVertical: scale(6),
+    paddingTop: verticalScale(30),
     backgroundColor: "#FFFFFF",
   },
   headerButton: {
-    padding: 8,
+    padding: scale(6),
   },
   headerCenter: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: scale(4),
   },
   saveButton: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#3B82F6",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    gap: 8,
+    paddingVertical: scale(8),
+    paddingHorizontal: scale(12),
+    borderRadius: scale(6),
+    gap: scale(6),
   },
   saveButtonDisabled: {
     backgroundColor: "#9CA3AF",
   },
   saveButtonText: {
-    fontSize: 15,
+    fontSize: fontScale(13),
     fontWeight: "600",
     color: "#FFFFFF",
   },
   imageContainer: {
-    marginHorizontal: 16,
-    marginVertical: 8,
-    borderRadius: 12,
+    marginHorizontal: scale(12),
+    marginVertical: scale(4),
+    borderRadius: scale(10),
     overflow: "hidden",
     backgroundColor: "#000",
-    maxHeight: 400,
+    maxHeight: isSmallScreen ? verticalScale(180) : verticalScale(300),
     alignSelf: "center",
     width: "100%",
   },
@@ -1018,11 +1024,11 @@ const styles = StyleSheet.create({
   },
   eyeButton: {
     position: "absolute",
-    bottom: 12,
-    right: 12,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    bottom: scale(10),
+    right: scale(10),
+    width: scale(36),
+    height: scale(36),
+    borderRadius: scale(18),
     backgroundColor: "rgba(0,0,0,0.5)",
     alignItems: "center",
     justifyContent: "center",
@@ -1030,17 +1036,17 @@ const styles = StyleSheet.create({
   tabBar: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: isSmallScreen ? verticalScale(6) : verticalScale(10),
+    paddingHorizontal: scale(12),
     borderBottomWidth: 1,
     borderBottomColor: "#F3F4F6",
   },
   tabButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingVertical: isSmallScreen ? verticalScale(4) : verticalScale(6),
+    paddingHorizontal: isSmallScreen ? scale(8) : scale(12),
   },
   tabText: {
-    fontSize: 15,
+    fontSize: isSmallScreen ? fontScale(12) : fontScale(14),
     fontWeight: "400",
     color: "#9CA3AF",
   },
@@ -1053,30 +1059,30 @@ const styles = StyleSheet.create({
   },
   adjustPanel: {
     flex: 1,
-    paddingHorizontal: 20,
+    paddingHorizontal: scale(16),
   },
   sectionTitle: {
-    fontSize: 12,
+    fontSize: isSmallScreen ? fontScale(10) : fontScale(12),
     fontWeight: "600",
     color: "#6B7280",
-    marginTop: 20,
-    marginBottom: 16,
+    marginTop: isSmallScreen ? verticalScale(10) : verticalScale(16),
+    marginBottom: isSmallScreen ? verticalScale(8) : verticalScale(12),
     letterSpacing: 1,
   },
   sliderRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 16,
-    height: 30,
+    marginBottom: isSmallScreen ? verticalScale(8) : verticalScale(14),
+    height: isSmallScreen ? verticalScale(24) : verticalScale(28),
   },
   sliderIcon: {
-    width: 36,
+    width: scale(30),
     alignItems: "center",
     justifyContent: "center",
   },
   sliderTrackContainer: {
     flex: 1,
-    height: 30,
+    height: isSmallScreen ? verticalScale(24) : verticalScale(28),
     justifyContent: "center",
     position: "relative",
   },
@@ -1084,12 +1090,12 @@ const styles = StyleSheet.create({
     position: "absolute",
     left: 0,
     right: 0,
-    borderRadius: 3,
+    borderRadius: scale(2),
   },
   sliderTrackFilled: {
     position: "absolute",
     left: 0,
-    borderRadius: 3,
+    borderRadius: scale(2),
   },
   sliderThumb: {
     position: "absolute",
@@ -1103,8 +1109,8 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   sliderValue: {
-    width: 36,
-    fontSize: 14,
+    width: scale(30),
+    fontSize: isSmallScreen ? fontScale(11) : fontScale(13),
     color: "#3B82F6",
     textAlign: "right",
     fontWeight: "500",
@@ -1115,7 +1121,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   placeholderText: {
-    fontSize: 16,
+    fontSize: fontScale(14),
     color: "#9CA3AF",
   },
   // Filter panel styles
@@ -1124,23 +1130,23 @@ const styles = StyleSheet.create({
   },
   categoryScroll: {
     flexGrow: 0,
-    paddingVertical: 16,
+    paddingVertical: isSmallScreen ? verticalScale(8) : verticalScale(12),
   },
   categoryContainer: {
-    paddingHorizontal: 16,
-    gap: 10,
+    paddingHorizontal: scale(12),
+    gap: scale(8),
   },
   categoryChip: {
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: 20,
+    paddingHorizontal: isSmallScreen ? scale(12) : scale(16),
+    paddingVertical: isSmallScreen ? verticalScale(6) : verticalScale(8),
+    borderRadius: scale(16),
     backgroundColor: "#F3F4F6",
   },
   categoryChipActive: {
     backgroundColor: "#3B82F6",
   },
   categoryChipText: {
-    fontSize: 14,
+    fontSize: isSmallScreen ? fontScale(11) : fontScale(13),
     fontWeight: "500",
     color: "#6B7280",
   },
@@ -1149,21 +1155,21 @@ const styles = StyleSheet.create({
   },
   filterGrid: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: scale(12),
   },
   filterGridContent: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 12,
+    gap: isSmallScreen ? scale(8) : scale(10),
   },
   filterItem: {
-    width: (SCREEN_WIDTH - 32 - 36) / 4,
+    width: isSmallScreen ? (SCREEN_WIDTH - scale(24) - scale(32)) / 5 : (SCREEN_WIDTH - scale(24) - scale(30)) / 4,
     alignItems: "center",
   },
   filterThumbnail: {
     width: "100%",
     aspectRatio: 1,
-    borderRadius: 10,
+    borderRadius: scale(8),
     overflow: "hidden",
     backgroundColor: "#E5E7EB",
     borderWidth: 2,
@@ -1178,19 +1184,19 @@ const styles = StyleSheet.create({
   },
   filterCheckmark: {
     position: "absolute",
-    top: 6,
-    left: 6,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    top: scale(4),
+    left: scale(4),
+    width: scale(18),
+    height: scale(18),
+    borderRadius: scale(9),
     backgroundColor: "#3B82F6",
     alignItems: "center",
     justifyContent: "center",
   },
   filterName: {
-    fontSize: 12,
+    fontSize: isSmallScreen ? fontScale(9) : fontScale(11),
     color: "#6B7280",
-    marginTop: 6,
+    marginTop: verticalScale(4),
     textAlign: "center",
   },
   filterNameActive: {
@@ -1201,27 +1207,27 @@ const styles = StyleSheet.create({
   toolsPanel: {
     flex: 1,
     justifyContent: "flex-end",
-    paddingBottom: 20,
+    paddingBottom: isSmallScreen ? verticalScale(10) : verticalScale(16),
   },
   toolsButtonsContainer: {
     flexDirection: "row",
-    paddingHorizontal: 20,
-    gap: 12,
+    paddingHorizontal: scale(16),
+    gap: scale(10),
   },
   toolButton: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingVertical: isSmallScreen ? verticalScale(10) : verticalScale(12),
+    borderRadius: scale(10),
     borderWidth: 1,
     borderColor: "#E5E7EB",
     backgroundColor: "#FFFFFF",
-    gap: 10,
+    gap: scale(8),
   },
   toolButtonText: {
-    fontSize: 15,
+    fontSize: isSmallScreen ? fontScale(12) : fontScale(14),
     fontWeight: "500",
     color: "#1F2937",
   },
@@ -1229,32 +1235,32 @@ const styles = StyleSheet.create({
   drawPanel: {
     flex: 1,
     justifyContent: "flex-end",
-    paddingBottom: 20,
+    paddingBottom: isSmallScreen ? verticalScale(10) : verticalScale(16),
   },
   drawToolsContainer: {
     flexDirection: "row",
-    paddingHorizontal: 20,
-    gap: 12,
-    marginBottom: 16,
+    paddingHorizontal: scale(16),
+    gap: scale(10),
+    marginBottom: isSmallScreen ? verticalScale(10) : verticalScale(14),
   },
   drawToolButton: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 14,
-    borderRadius: 12,
+    paddingVertical: isSmallScreen ? verticalScale(10) : verticalScale(12),
+    borderRadius: scale(10),
     borderWidth: 1,
     borderColor: "#E5E7EB",
     backgroundColor: "#FFFFFF",
-    gap: 10,
+    gap: scale(8),
   },
   drawToolButtonActive: {
     backgroundColor: "#1F2937",
     borderColor: "#1F2937",
   },
   drawToolText: {
-    fontSize: 15,
+    fontSize: isSmallScreen ? fontScale(12) : fontScale(14),
     fontWeight: "500",
     color: "#1F2937",
   },
@@ -1263,15 +1269,15 @@ const styles = StyleSheet.create({
   },
   colorPalette: {
     flexDirection: "row",
-    paddingHorizontal: 20,
-    gap: 8,
+    paddingHorizontal: scale(16),
+    gap: scale(6),
   },
   colorSwatch: {
     flex: 1,
     aspectRatio: 1,
-    borderRadius: 6,
-    maxWidth: 44,
-    maxHeight: 44,
+    borderRadius: scale(5),
+    maxWidth: isSmallScreen ? scale(32) : scale(40),
+    maxHeight: isSmallScreen ? scale(32) : scale(40),
   },
   colorSwatchWhite: {
     borderWidth: 1,
@@ -1282,15 +1288,15 @@ const styles = StyleSheet.create({
     borderColor: "#3B82F6",
   },
   clearButton: {
-    marginTop: 16,
-    marginHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
+    marginTop: isSmallScreen ? verticalScale(10) : verticalScale(14),
+    marginHorizontal: scale(16),
+    paddingVertical: isSmallScreen ? verticalScale(8) : verticalScale(10),
+    borderRadius: scale(6),
     backgroundColor: "#FEE2E2",
     alignItems: "center",
   },
   clearButtonText: {
-    fontSize: 14,
+    fontSize: isSmallScreen ? fontScale(12) : fontScale(13),
     fontWeight: "500",
     color: "#DC2626",
   },

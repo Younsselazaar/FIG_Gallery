@@ -89,18 +89,27 @@ export function KeypadProvider({ children }: Props) {
    * FIG system builds inject key events via native layer.
    */
   useEffect(() => {
-    const emitter = new NativeEventEmitter(
-      NativeModules.FigKeyEventModule || NativeModules.DeviceEventManagerModule
-    );
+    // Only set up native key listener if the module exists
+    const nativeModule = NativeModules.FigKeyEventModule;
+    if (!nativeModule) {
+      // Module not available - skip native key event setup
+      return;
+    }
 
-    const subscription = emitter.addListener(
-      "onKeyDown",
-      (event: { keyCode: number }) => {
-        dispatchKey(event.keyCode);
-      }
-    );
+    try {
+      const emitter = new NativeEventEmitter(nativeModule);
 
-    return () => subscription.remove();
+      const subscription = emitter.addListener(
+        "onKeyDown",
+        (event: { keyCode: number }) => {
+          dispatchKey(event.keyCode);
+        }
+      );
+
+      return () => subscription.remove();
+    } catch (error) {
+      console.warn("Failed to set up key event listener:", error);
+    }
   }, []);
 
   return (
