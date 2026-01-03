@@ -90,11 +90,13 @@ export function KeypadProvider({ children }: Props) {
    */
   useEffect(() => {
     // Only set up native key listener if the module exists
-    const nativeModule = NativeModules.FigKeyEventModule;
+    const nativeModule = NativeModules.KeyEventModule;
     if (!nativeModule) {
       // Module not available - skip native key event setup
+      console.log("KeyEventModule not available");
       return;
     }
+    console.log("KeyEventModule found, setting up listener");
 
     try {
       const emitter = new NativeEventEmitter(nativeModule);

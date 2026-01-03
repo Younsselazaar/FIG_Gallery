@@ -47,6 +47,16 @@ public class MainActivity extends ReactActivity {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // Send DPAD key down events to React Native (only first press, not repeats)
+        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+            int keyCode = event.getKeyCode();
+            // Handle DPAD keys (19-23), Enter (66), and Numpad Enter (160)
+            if ((keyCode >= KeyEvent.KEYCODE_DPAD_UP && keyCode <= KeyEvent.KEYCODE_DPAD_CENTER) ||
+                keyCode == KeyEvent.KEYCODE_ENTER ||
+                keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) {
+                KeyEventModule.sendKeyEvent(keyCode, event.getAction());
+            }
+        }
         return super.dispatchKeyEvent(event);
     }
 }

@@ -21,6 +21,8 @@ export const KeyCodes = {
   DPAD_LEFT: 21,
   DPAD_RIGHT: 22,
   DPAD_CENTER: 23,
+  ENTER: 66,
+  NUMPAD_ENTER: 160,
 
   // Soft / system
   BACK: 4,

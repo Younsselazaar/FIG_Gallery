@@ -36,7 +36,8 @@ public class MainApplication extends Application implements ReactApplication {
                 @Override
                 protected List<ReactPackage> getPackages() {
                     List<ReactPackage> packages = new PackageList(this).getPackages();
-                    // No manual packages required
+                    // Add KeyEventPackage for D-pad navigation
+                    packages.add(new KeyEventPackage());
                     return packages;
                 }
 

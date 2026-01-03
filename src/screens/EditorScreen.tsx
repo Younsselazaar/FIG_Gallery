@@ -27,6 +27,8 @@ import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import { getPhotoById, insertPhoto } from "../db/photoRepository";
 import { addEdit } from "../db/editRepository";
 import { scale, fontScale, verticalScale } from "../theme/responsive";
+import { useKeypad } from "../keypad/KeypadContext";
+import { KeyCodes } from "../keypad/keyCodes";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -37,6 +39,8 @@ type RouteParams = {
 };
 
 type TabKey = "adjust" | "filter" | "tools" | "draw";
+type FocusArea = "none" | "header" | "tabs" | "categories" | "filters";
+type FocusElement = "none" | "back" | "undo" | "reset" | "copy" | "save" | "tab_adjust" | "tab_filter" | "tab_tools" | "tab_draw";
 
 // ============ ICONS ============
 
@@ -214,9 +218,10 @@ interface ThickSliderProps {
   icon: React.ReactNode;
   value: number;
   onChange: (val: number) => void;
+  onStart?: () => void;
 }
 
-function ThickSlider({ icon, value, onChange }: ThickSliderProps) {
+function ThickSlider({ icon, value, onChange, onStart }: ThickSliderProps) {
   const sliderWidth = SCREEN_WIDTH - scale(isSmallScreen ? 80 : 100); // Account for icon and value
   const thumbSize = isSmallScreen ? scale(14) : scale(18);
   const trackHeight = isSmallScreen ? scale(4) : scale(5);
@@ -232,6 +237,7 @@ function ThickSlider({ icon, value, onChange }: ThickSliderProps) {
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: () => true,
     onPanResponderGrant: (evt) => {
+      if (onStart) onStart(); // Save history BEFORE change
       const touchX = evt.nativeEvent.locationX;
       const newValue = positionToValue(Math.max(0, Math.min(sliderWidth, touchX)));
       onChange(newValue);
@@ -241,7 +247,7 @@ function ThickSlider({ icon, value, onChange }: ThickSliderProps) {
       const newValue = positionToValue(Math.max(0, Math.min(sliderWidth, touchX)));
       onChange(newValue);
     },
-  }), [sliderWidth, onChange]);
+  }), [sliderWidth, onChange, onStart]);
 
   return (
     <View style={styles.sliderRow}>
@@ -307,6 +313,14 @@ export default function EditorScreen() {
   const [currentPath, setCurrentPath] = useState<string>("");
   const [isDrawing, setIsDrawing] = useState(false);
 
+  // D-pad focus state
+  const [focusedElement, setFocusedElement] = useState<FocusElement>("none");
+  const [focusArea, setFocusArea] = useState<FocusArea>("none");
+  const [focusedCategoryIndex, setFocusedCategoryIndex] = useState(0);
+  const [focusedFilterIndex, setFocusedFilterIndex] = useState(0);
+  const { registerHandler, unregisterHandler } = useKeypad();
+  const lastKeyTime = useRef(0);
+
   // Adjustments (range -100 to 100, default 0)
   const [exposure, setExposure] = useState(0);
   const [brightness, setBrightness] = useState(0);
@@ -316,6 +330,298 @@ export default function EditorScreen() {
   const [saturation, setSaturation] = useState(0);
   const [temperature, setTemperature] = useState(0);
   const [sharpness, setSharpness] = useState(0);
+
+  // Undo history
+  type EditorState = {
+    exposure: number;
+    brightness: number;
+    contrast: number;
+    highlights: number;
+    shadows: number;
+    saturation: number;
+    temperature: number;
+    sharpness: number;
+    selectedFilter: string;
+    rotation: number;
+    paths: Array<{ path: string; color: string; strokeWidth: number; opacity: number }>;
+  };
+  const [undoHistory, setUndoHistory] = useState<EditorState[]>([]);
+  const lastSavedState = useRef<EditorState | null>(null);
+
+  // Save current state to history (called when user finishes an edit action)
+  const saveToHistory = useCallback(() => {
+    const currentState: EditorState = {
+      exposure, brightness, contrast, highlights, shadows,
+      saturation, temperature, sharpness, selectedFilter, rotation, paths
+    };
+
+    // Only save if state actually changed
+    if (lastSavedState.current &&
+        JSON.stringify(currentState) === JSON.stringify(lastSavedState.current)) {
+      return;
+    }
+
+    setUndoHistory(prev => [...prev, currentState]);
+    lastSavedState.current = currentState;
+  }, [exposure, brightness, contrast, highlights, shadows, saturation, temperature, sharpness, selectedFilter, rotation, paths]);
+
+  // Undo last action
+  const handleUndo = useCallback(() => {
+    if (undoHistory.length === 0) return;
+
+    const prevState = undoHistory[undoHistory.length - 1];
+    setUndoHistory(prev => prev.slice(0, -1));
+
+    // Restore previous state
+    setExposure(prevState.exposure);
+    setBrightness(prevState.brightness);
+    setContrast(prevState.contrast);
+    setHighlights(prevState.highlights);
+    setShadows(prevState.shadows);
+    setSaturation(prevState.saturation);
+    setTemperature(prevState.temperature);
+    setSharpness(prevState.sharpness);
+    setSelectedFilter(prevState.selectedFilter);
+    setRotation(prevState.rotation);
+    setPaths(prevState.paths);
+
+    lastSavedState.current = prevState;
+  }, [undoHistory]);
+
+  // D-pad navigation handler
+  const tabOrder: FocusElement[] = ["tab_adjust", "tab_filter", "tab_tools", "tab_draw"];
+  const filterCategories = ["Basic", "Vintage", "Mood", "Color", "Portrait", "Art"];
+  const filters: Record<string, string[]> = {
+    Basic: ["Original", "Vivid", "B&W", "Warm", "Cool"],
+    Vintage: ["Sepia", "Retro", "Film", "Fade", "Grain"],
+    Mood: ["Drama", "Noir", "Cinematic", "Muted", "Pop"],
+    Color: ["Teal", "Orange", "Pink", "Blue", "Green"],
+    Portrait: ["Soft", "Glow", "Sharp", "Smooth", "Natural"],
+    Art: ["Sketch", "Paint", "Poster", "Comic", "Neon"],
+  };
+  const filtersPerRow = isSmallScreen ? 5 : 4;
+
+  const handleKeyDown = useCallback((keyCode: number): boolean => {
+    // Debounce: ignore events within 100ms
+    const now = Date.now();
+    if (now - lastKeyTime.current < 100) {
+      return true;
+    }
+    lastKeyTime.current = now;
+
+    // Start focus on first D-pad press
+    if (focusArea === "none") {
+      if (keyCode === KeyCodes.DPAD_LEFT || keyCode === KeyCodes.DPAD_RIGHT ||
+          keyCode === KeyCodes.DPAD_UP || keyCode === KeyCodes.DPAD_DOWN ||
+          keyCode === KeyCodes.DPAD_CENTER || keyCode === KeyCodes.ENTER) {
+        setFocusArea("tabs");
+        setFocusedElement(`tab_${activeTab}` as FocusElement);
+        return true;
+      }
+    }
+
+    // Handle navigation based on focus area
+    if (focusArea === "tabs") {
+      switch (keyCode) {
+        case KeyCodes.DPAD_LEFT:
+          if (focusedElement === "save") {
+            setFocusedElement("back");
+          } else if (focusedElement.startsWith("tab_")) {
+            const currentIdx = tabOrder.indexOf(focusedElement);
+            if (currentIdx > 0) {
+              setFocusedElement(tabOrder[currentIdx - 1]);
+            }
+          }
+          return true;
+
+        case KeyCodes.DPAD_RIGHT:
+          if (focusedElement === "back") {
+            setFocusedElement("save");
+          } else if (focusedElement.startsWith("tab_")) {
+            const currentIdx = tabOrder.indexOf(focusedElement);
+            if (currentIdx < tabOrder.length - 1) {
+              setFocusedElement(tabOrder[currentIdx + 1]);
+            }
+          }
+          return true;
+
+        case KeyCodes.DPAD_UP:
+          if (focusedElement.startsWith("tab_")) {
+            setFocusArea("header");
+            setFocusedElement("back");
+          }
+          return true;
+
+        case KeyCodes.DPAD_DOWN:
+          if (focusedElement === "back" || focusedElement === "save") {
+            setFocusedElement(`tab_${activeTab}` as FocusElement);
+          } else if (focusedElement.startsWith("tab_") && activeTab === "filter") {
+            // Move to categories when on filter tab
+            setFocusArea("categories");
+            setFocusedCategoryIndex(filterCategories.indexOf(selectedCategory));
+          }
+          return true;
+
+        case KeyCodes.DPAD_CENTER:
+        case KeyCodes.ENTER:
+        case KeyCodes.NUMPAD_ENTER:
+          if (focusedElement === "back") {
+            navigation.goBack();
+          } else if (focusedElement === "save") {
+            handleSave();
+          } else if (focusedElement === "tab_adjust") {
+            setActiveTab("adjust");
+          } else if (focusedElement === "tab_filter") {
+            setActiveTab("filter");
+          } else if (focusedElement === "tab_tools") {
+            setActiveTab("tools");
+          } else if (focusedElement === "tab_draw") {
+            setActiveTab("draw");
+          }
+          return true;
+      }
+    } else if (focusArea === "header") {
+      const headerOrder: FocusElement[] = ["back", "undo", "reset", "copy", "save"];
+      const currentHeaderIdx = headerOrder.indexOf(focusedElement);
+
+      switch (keyCode) {
+        case KeyCodes.DPAD_LEFT:
+          if (currentHeaderIdx > 0) {
+            setFocusedElement(headerOrder[currentHeaderIdx - 1]);
+          }
+          return true;
+
+        case KeyCodes.DPAD_RIGHT:
+          if (currentHeaderIdx < headerOrder.length - 1) {
+            setFocusedElement(headerOrder[currentHeaderIdx + 1]);
+          }
+          return true;
+
+        case KeyCodes.DPAD_DOWN:
+          setFocusArea("tabs");
+          setFocusedElement(`tab_${activeTab}` as FocusElement);
+          return true;
+
+        case KeyCodes.DPAD_CENTER:
+        case KeyCodes.ENTER:
+        case KeyCodes.NUMPAD_ENTER:
+          if (focusedElement === "back") {
+            navigation.goBack();
+          } else if (focusedElement === "undo") {
+            handleUndo();
+          } else if (focusedElement === "reset") {
+            handleReset();
+          } else if (focusedElement === "save") {
+            handleSave();
+          }
+          return true;
+      }
+    } else if (focusArea === "categories") {
+      const categoryCount = filterCategories.length;
+      switch (keyCode) {
+        case KeyCodes.DPAD_LEFT:
+          if (focusedCategoryIndex > 0) {
+            setFocusedCategoryIndex(focusedCategoryIndex - 1);
+          }
+          return true;
+
+        case KeyCodes.DPAD_RIGHT:
+          if (focusedCategoryIndex < categoryCount - 1) {
+            setFocusedCategoryIndex(focusedCategoryIndex + 1);
+          }
+          return true;
+
+        case KeyCodes.DPAD_UP:
+          setFocusArea("tabs");
+          setFocusedElement("tab_filter");
+          return true;
+
+        case KeyCodes.DPAD_DOWN:
+          setFocusArea("filters");
+          setFocusedFilterIndex(0);
+          return true;
+
+        case KeyCodes.DPAD_CENTER:
+        case KeyCodes.ENTER:
+        case KeyCodes.NUMPAD_ENTER:
+          // Select the focused category
+          setSelectedCategory(filterCategories[focusedCategoryIndex]);
+          setFocusedFilterIndex(0);
+          return true;
+      }
+    } else if (focusArea === "filters") {
+      const currentFilters = filters[selectedCategory] || [];
+      const filterCount = currentFilters.length;
+      const currentRow = Math.floor(focusedFilterIndex / filtersPerRow);
+      const currentCol = focusedFilterIndex % filtersPerRow;
+      const totalRows = Math.ceil(filterCount / filtersPerRow);
+
+      switch (keyCode) {
+        case KeyCodes.DPAD_LEFT:
+          if (currentCol > 0) {
+            setFocusedFilterIndex(focusedFilterIndex - 1);
+          }
+          return true;
+
+        case KeyCodes.DPAD_RIGHT:
+          if (focusedFilterIndex < filterCount - 1 && currentCol < filtersPerRow - 1) {
+            setFocusedFilterIndex(focusedFilterIndex + 1);
+          }
+          return true;
+
+        case KeyCodes.DPAD_UP:
+          if (currentRow > 0) {
+            const newIndex = (currentRow - 1) * filtersPerRow + currentCol;
+            setFocusedFilterIndex(Math.min(newIndex, filterCount - 1));
+          } else {
+            // Move back to categories
+            setFocusArea("categories");
+          }
+          return true;
+
+        case KeyCodes.DPAD_DOWN:
+          if (currentRow < totalRows - 1) {
+            const newIndex = (currentRow + 1) * filtersPerRow + currentCol;
+            setFocusedFilterIndex(Math.min(newIndex, filterCount - 1));
+          }
+          return true;
+
+        case KeyCodes.DPAD_CENTER:
+        case KeyCodes.ENTER:
+        case KeyCodes.NUMPAD_ENTER:
+          // Select the focused filter
+          saveToHistory();
+          setSelectedFilter(currentFilters[focusedFilterIndex]);
+          return true;
+      }
+    }
+
+    // Handle BACK key globally
+    if (keyCode === KeyCodes.BACK) {
+      if (focusArea === "filters") {
+        setFocusArea("categories");
+      } else if (focusArea === "categories") {
+        setFocusArea("tabs");
+        setFocusedElement("tab_filter");
+      } else {
+        navigation.goBack();
+      }
+      return true;
+    }
+
+    return false;
+  }, [focusArea, focusedElement, focusedCategoryIndex, focusedFilterIndex, activeTab, selectedCategory, navigation, saveToHistory]);
+
+  // Register keypad handler with delay to prevent lingering events from previous screen
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      registerHandler(handleKeyDown);
+    }, 200);
+    return () => {
+      clearTimeout(timer);
+      unregisterHandler(handleKeyDown);
+    };
+  }, [handleKeyDown, registerHandler, unregisterHandler]);
 
   useEffect(() => {
     loadPhoto();
@@ -383,6 +689,9 @@ export default function EditorScreen() {
     try {
       setIsSaving(true);
 
+      // Make sure we're showing the filtered image, not original
+      setShowOriginal(false);
+
       // Request permission first
       const hasPermission = await requestSavePermission();
       if (!hasPermission) {
@@ -391,11 +700,15 @@ export default function EditorScreen() {
         return;
       }
 
+      // Small delay to ensure filters are rendered before capture
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       // Capture the edited image
       if (imageContainerRef.current) {
         const uri = await captureRef(imageContainerRef, {
           format: "jpg",
           quality: 1,
+          result: "tmpfile",
         });
 
         // Save to gallery as a copy
@@ -565,36 +878,24 @@ export default function EditorScreen() {
   const iconSize = isSmallScreen ? 16 : 20;
 
   const renderAdjustPanel = () => (
-    <ScrollView style={styles.adjustPanel} showsVerticalScrollIndicator={false}>
+    <ScrollView style={styles.adjustPanel} showsVerticalScrollIndicator={false} focusable={false} accessible={false}>
       <Text style={styles.sectionTitle}>LIGHT</Text>
-      <ThickSlider icon={<ExposureIcon size={iconSize} />} value={exposure} onChange={setExposure} />
-      <ThickSlider icon={<BrightnessIcon size={iconSize} />} value={brightness} onChange={setBrightness} />
-      <ThickSlider icon={<ContrastIcon size={iconSize} />} value={contrast} onChange={setContrast} />
-      <ThickSlider icon={<HighlightsIcon size={iconSize} />} value={highlights} onChange={setHighlights} />
-      <ThickSlider icon={<ShadowsIcon size={iconSize} />} value={shadows} onChange={setShadows} />
+      <ThickSlider icon={<ExposureIcon size={iconSize} />} value={exposure} onChange={setExposure} onStart={saveToHistory} />
+      <ThickSlider icon={<BrightnessIcon size={iconSize} />} value={brightness} onChange={setBrightness} onStart={saveToHistory} />
+      <ThickSlider icon={<ContrastIcon size={iconSize} />} value={contrast} onChange={setContrast} onStart={saveToHistory} />
+      <ThickSlider icon={<HighlightsIcon size={iconSize} />} value={highlights} onChange={setHighlights} onStart={saveToHistory} />
+      <ThickSlider icon={<ShadowsIcon size={iconSize} />} value={shadows} onChange={setShadows} onStart={saveToHistory} />
 
       <Text style={styles.sectionTitle}>COLOR</Text>
-      <ThickSlider icon={<SaturationIcon size={iconSize} />} value={saturation} onChange={setSaturation} />
-      <ThickSlider icon={<TemperatureIcon size={iconSize} />} value={temperature} onChange={setTemperature} />
+      <ThickSlider icon={<SaturationIcon size={iconSize} />} value={saturation} onChange={setSaturation} onStart={saveToHistory} />
+      <ThickSlider icon={<TemperatureIcon size={iconSize} />} value={temperature} onChange={setTemperature} onStart={saveToHistory} />
 
       <Text style={styles.sectionTitle}>DETAIL</Text>
-      <ThickSlider icon={<SharpnessIcon size={iconSize} />} value={sharpness} onChange={setSharpness} />
+      <ThickSlider icon={<SharpnessIcon size={iconSize} />} value={sharpness} onChange={setSharpness} onStart={saveToHistory} />
 
       <View style={{ height: isSmallScreen ? verticalScale(40) : verticalScale(80) }} />
     </ScrollView>
   );
-
-  // Filter categories and filters
-  const filterCategories = ["Basic", "Vintage", "Mood", "Color", "Portrait", "Art"];
-
-  const filters: Record<string, string[]> = {
-    Basic: ["Original", "Vivid", "B&W", "Warm", "Cool"],
-    Vintage: ["Sepia", "Retro", "Film", "Fade", "Grain"],
-    Mood: ["Drama", "Noir", "Cinematic", "Muted", "Pop"],
-    Color: ["Teal", "Orange", "Pink", "Blue", "Green"],
-    Portrait: ["Soft", "Glow", "Sharp", "Smooth", "Natural"],
-    Art: ["Sketch", "Paint", "Poster", "Comic", "Neon"],
-  };
 
   const renderFilterPanel = () => (
     <View style={styles.filterPanel}>
@@ -604,19 +905,25 @@ export default function EditorScreen() {
         showsHorizontalScrollIndicator={false}
         style={styles.categoryScroll}
         contentContainerStyle={styles.categoryContainer}
+        focusable={false}
+        accessible={false}
       >
-        {filterCategories.map((category) => (
+        {filterCategories.map((category, index) => (
           <Pressable
             key={category}
             style={[
               styles.categoryChip,
-              selectedCategory === category && styles.categoryChipActive
+              selectedCategory === category && styles.categoryChipActive,
+              focusArea === "categories" && focusedCategoryIndex === index && styles.categoryChipFocused
             ]}
             onPress={() => setSelectedCategory(category)}
+            focusable={false}
+            accessible={false}
           >
             <Text style={[
               styles.categoryChipText,
-              selectedCategory === category && styles.categoryChipTextActive
+              selectedCategory === category && styles.categoryChipTextActive,
+              focusArea === "categories" && focusedCategoryIndex === index && styles.categoryChipTextFocused
             ]}>
               {category}
             </Text>
@@ -625,17 +932,20 @@ export default function EditorScreen() {
       </ScrollView>
 
       {/* Filter grid */}
-      <ScrollView style={styles.filterGrid} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.filterGrid} showsVerticalScrollIndicator={false} focusable={false} accessible={false}>
         <View style={styles.filterGridContent}>
-          {filters[selectedCategory]?.map((filterName) => (
+          {filters[selectedCategory]?.map((filterName, index) => (
             <Pressable
               key={filterName}
               style={styles.filterItem}
-              onPress={() => setSelectedFilter(filterName)}
+              onPress={() => { saveToHistory(); setSelectedFilter(filterName); }}
+              focusable={false}
+              accessible={false}
             >
               <View style={[
                 styles.filterThumbnail,
-                selectedFilter === filterName && styles.filterThumbnailActive
+                selectedFilter === filterName && styles.filterThumbnailActive,
+                focusArea === "filters" && focusedFilterIndex === index && styles.filterThumbnailFocused
               ]}>
                 {photo && (
                   <ColorMatrix matrix={getFilterMatrix(filterName)}>
@@ -656,7 +966,8 @@ export default function EditorScreen() {
               </View>
               <Text style={[
                 styles.filterName,
-                selectedFilter === filterName && styles.filterNameActive
+                selectedFilter === filterName && styles.filterNameActive,
+                focusArea === "filters" && focusedFilterIndex === index && styles.filterNameFocused
               ]}>
                 {filterName}
               </Text>
@@ -669,6 +980,7 @@ export default function EditorScreen() {
   );
 
   const handleRotate = () => {
+    saveToHistory();
     setRotation((prev) => (prev + 90) % 360);
   };
 
@@ -715,6 +1027,7 @@ export default function EditorScreen() {
   }, [rotation, imageSize, isRotated90or270]);
 
   const handleToolsReset = () => {
+    saveToHistory();
     setRotation(0);
   };
 
@@ -723,6 +1036,7 @@ export default function EditorScreen() {
     onStartShouldSetPanResponder: () => activeTab === "draw",
     onMoveShouldSetPanResponder: () => activeTab === "draw",
     onPanResponderGrant: (evt) => {
+      saveToHistory(); // Save before starting new stroke
       const { locationX, locationY } = evt.nativeEvent;
       setCurrentPath(`M${locationX},${locationY}`);
       setIsDrawing(true);
@@ -741,9 +1055,10 @@ export default function EditorScreen() {
       setCurrentPath("");
       setIsDrawing(false);
     },
-  }), [activeTab, isDrawing, currentPath, drawTool, drawColor]);
+  }), [activeTab, isDrawing, currentPath, drawTool, drawColor, saveToHistory]);
 
   const handleClearDrawing = () => {
+    saveToHistory();
     setPaths([]);
     setCurrentPath("");
   };
@@ -751,11 +1066,11 @@ export default function EditorScreen() {
   const renderToolsPanel = () => (
     <View style={styles.toolsPanel}>
       <View style={styles.toolsButtonsContainer}>
-        <Pressable style={styles.toolButton} onPress={handleRotate}>
+        <Pressable style={styles.toolButton} onPress={handleRotate} focusable={false}>
           <RotateIcon size={22} color="#1F2937" />
           <Text style={styles.toolButtonText}>90°</Text>
         </Pressable>
-        <Pressable style={styles.toolButton} onPress={handleToolsReset}>
+        <Pressable style={styles.toolButton} onPress={handleToolsReset} focusable={false}>
           <ResetIcon size={22} color="#1F2937" />
           <Text style={styles.toolButtonText}>Reset</Text>
         </Pressable>
@@ -785,6 +1100,7 @@ export default function EditorScreen() {
             drawTool === "pen" && styles.drawToolButtonActive
           ]}
           onPress={() => setDrawTool("pen")}
+          focusable={false}
         >
           <PenIcon size={20} color={drawTool === "pen" ? "#FFFFFF" : "#1F2937"} />
           <Text style={[
@@ -798,6 +1114,7 @@ export default function EditorScreen() {
             drawTool === "highlight" && styles.drawToolButtonActive
           ]}
           onPress={() => setDrawTool("highlight")}
+          focusable={false}
         >
           <HighlightIcon size={20} color={drawTool === "highlight" ? "#FFFFFF" : "#1F2937"} />
           <Text style={[
@@ -819,13 +1136,14 @@ export default function EditorScreen() {
               drawColor === color && styles.colorSwatchActive
             ]}
             onPress={() => setDrawColor(color)}
+            focusable={false}
           />
         ))}
       </View>
 
       {/* Clear button */}
       {paths.length > 0 && (
-        <Pressable style={styles.clearButton} onPress={handleClearDrawing}>
+        <Pressable style={styles.clearButton} onPress={handleClearDrawing} focusable={false}>
           <Text style={styles.clearButtonText}>Clear Drawing</Text>
         </Pressable>
       )}
@@ -834,29 +1152,207 @@ export default function EditorScreen() {
 
   if (!photo) return null;
 
+  // Check if we're in fullscreen edit mode (tools or draw)
+  const isFullscreenMode = activeTab === "tools" || activeTab === "draw";
+
+  // Fullscreen mode for Tools and Draw
+  if (isFullscreenMode) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="light-content" backgroundColor="#000000" translucent />
+
+        {/* Fullscreen Image */}
+        <View
+          ref={imageContainerRef}
+          style={styles.fullscreenImageContainer}
+          {...(activeTab === "draw" ? drawPanResponder.panHandlers : {})}
+          collapsable={false}
+        >
+          <View style={[styles.fullscreenImageWrapper, getRotatedImageStyle]}>
+            {showOriginal ? (
+              <Image source={{ uri: photo.uri }} style={styles.image} resizeMode="contain" />
+            ) : (
+              filteredImage
+            )}
+          </View>
+          {/* Drawing Layer */}
+          {(paths.length > 0 || currentPath) && (
+            <Svg style={styles.drawingLayer}>
+              {paths.map((p, index) => (
+                <Path
+                  key={index}
+                  d={p.path}
+                  stroke={p.color}
+                  strokeWidth={p.strokeWidth}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  fill="none"
+                  opacity={p.opacity}
+                />
+              ))}
+              {currentPath && (
+                <Path
+                  d={currentPath}
+                  stroke={drawColor}
+                  strokeWidth={drawTool === "pen" ? 4 : 20}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  fill="none"
+                  opacity={drawTool === "pen" ? 1 : 0.4}
+                />
+              )}
+            </Svg>
+          )}
+        </View>
+
+        {/* Floating Header */}
+        <View style={styles.floatingHeader}>
+          <Pressable
+            onPress={() => setActiveTab("adjust")}
+            style={styles.floatingBackButton}
+            focusable={false}
+          >
+            <BackIcon size={24} color="#FFFFFF" />
+          </Pressable>
+          <Text style={styles.floatingTitle}>
+            {activeTab === "tools" ? "Tools" : "Draw"}
+          </Text>
+          <Pressable
+            onPress={handleSave}
+            style={[styles.floatingSaveButton, isSaving && styles.saveButtonDisabled]}
+            disabled={isSaving}
+            focusable={false}
+          >
+            <SaveIcon size={16} color="#FFFFFF" />
+            <Text style={styles.floatingSaveText}>{isSaving ? "..." : "Save"}</Text>
+          </Pressable>
+        </View>
+
+        {/* Floating Controls */}
+        <View style={styles.floatingControls}>
+          {activeTab === "tools" && (
+            <View style={styles.floatingToolsRow}>
+              <Pressable style={styles.floatingToolButton} onPress={handleRotate} focusable={false}>
+                <RotateIcon size={22} color="#FFFFFF" />
+                <Text style={styles.floatingToolText}>90°</Text>
+              </Pressable>
+              <Pressable style={styles.floatingToolButton} onPress={handleToolsReset} focusable={false}>
+                <ResetIcon size={22} color="#FFFFFF" />
+                <Text style={styles.floatingToolText}>Reset</Text>
+              </Pressable>
+            </View>
+          )}
+          {activeTab === "draw" && (
+            <View style={styles.floatingDrawControls}>
+              {/* Tool buttons */}
+              <View style={styles.floatingDrawToolsRow}>
+                <Pressable
+                  style={[
+                    styles.floatingDrawToolButton,
+                    drawTool === "pen" && styles.floatingDrawToolButtonActive
+                  ]}
+                  onPress={() => setDrawTool("pen")}
+                  focusable={false}
+                >
+                  <PenIcon size={18} color="#FFFFFF" />
+                </Pressable>
+                <Pressable
+                  style={[
+                    styles.floatingDrawToolButton,
+                    drawTool === "highlight" && styles.floatingDrawToolButtonActive
+                  ]}
+                  onPress={() => setDrawTool("highlight")}
+                  focusable={false}
+                >
+                  <HighlightIcon size={18} color="#FFFFFF" />
+                </Pressable>
+                {paths.length > 0 && (
+                  <Pressable style={styles.floatingClearButton} onPress={handleClearDrawing} focusable={false}>
+                    <Text style={styles.floatingClearText}>Clear</Text>
+                  </Pressable>
+                )}
+              </View>
+              {/* Color palette */}
+              <View style={styles.floatingColorPalette}>
+                {drawColors.map((color) => (
+                  <Pressable
+                    key={color}
+                    style={[
+                      styles.floatingColorSwatch,
+                      { backgroundColor: color },
+                      color === "#FFFFFF" && styles.colorSwatchWhite,
+                      drawColor === color && styles.floatingColorSwatchActive
+                    ]}
+                    onPress={() => setDrawColor(color)}
+                    focusable={false}
+                  />
+                ))}
+              </View>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
 
       {/* Header */}
       <View style={styles.header}>
-        <Pressable onPress={() => navigation.goBack()} style={styles.headerButton}>
-          <BackIcon size={24} color="#1F2937" />
+        <Pressable
+          onPress={() => navigation.goBack()}
+          style={[styles.headerButton, focusArea === "header" && focusedElement === "back" && styles.buttonFocused]}
+          focusable={false}
+          accessible={false}
+        >
+          <BackIcon size={24} color={focusArea === "header" && focusedElement === "back" ? "#000" : "#1F2937"} />
         </Pressable>
 
         <View style={styles.headerCenter}>
-          <Pressable onPress={handleReset} style={styles.headerButton}>
-            <UndoIcon size={22} color="#6B7280" />
+          <Pressable
+            onPress={handleUndo}
+            style={[
+              styles.headerButton,
+              undoHistory.length === 0 && styles.headerButtonDisabled,
+              focusArea === "header" && focusedElement === "undo" && styles.buttonFocused
+            ]}
+            focusable={false}
+            accessible={false}
+          >
+            <UndoIcon size={22} color={focusArea === "header" && focusedElement === "undo" ? "#000" : (undoHistory.length > 0 ? "#1F2937" : "#D1D5DB")} />
           </Pressable>
-          <Pressable style={styles.headerButton}>
-            <HistoryIcon size={22} color="#6B7280" />
+          <Pressable
+            onPress={handleReset}
+            style={[
+              styles.headerButton,
+              focusArea === "header" && focusedElement === "reset" && styles.buttonFocused
+            ]}
+            focusable={false}
+            accessible={false}
+          >
+            <HistoryIcon size={22} color={focusArea === "header" && focusedElement === "reset" ? "#000" : "#6B7280"} />
           </Pressable>
-          <Pressable style={styles.headerButton}>
-            <CopyIcon size={22} color="#6B7280" />
+          <Pressable
+            style={[
+              styles.headerButton,
+              focusArea === "header" && focusedElement === "copy" && styles.buttonFocused
+            ]}
+            focusable={false}
+            accessible={false}
+          >
+            <CopyIcon size={22} color={focusArea === "header" && focusedElement === "copy" ? "#000" : "#6B7280"} />
           </Pressable>
         </View>
 
-        <Pressable onPress={handleSave} style={[styles.saveButton, isSaving && styles.saveButtonDisabled]} disabled={isSaving}>
+        <Pressable
+          onPress={handleSave}
+          style={[styles.saveButton, isSaving && styles.saveButtonDisabled, focusArea === "header" && focusedElement === "save" && styles.saveButtonFocused]}
+          disabled={isSaving}
+          focusable={false}
+          accessible={false}
+        >
           <SaveIcon size={16} color="#FFFFFF" />
           <Text style={styles.saveButtonText}>{isSaving ? "Saving..." : "Save"}</Text>
         </Pressable>
@@ -869,7 +1365,6 @@ export default function EditorScreen() {
           styles.imageContainer,
           containerAspectRatio && { aspectRatio: containerAspectRatio }
         ]}
-        {...(activeTab === "draw" ? drawPanResponder.panHandlers : {})}
         collapsable={false}
       >
         <View style={[styles.imageWrapper, getRotatedImageStyle]}>
@@ -879,71 +1374,72 @@ export default function EditorScreen() {
             filteredImage
           )}
         </View>
-        {/* Drawing Layer */}
-        {(paths.length > 0 || currentPath) && (
-          <Svg style={styles.drawingLayer}>
-            {paths.map((p, index) => (
-              <Path
-                key={index}
-                d={p.path}
-                stroke={p.color}
-                strokeWidth={p.strokeWidth}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-                opacity={p.opacity}
-              />
-            ))}
-            {currentPath && (
-              <Path
-                d={currentPath}
-                stroke={drawColor}
-                strokeWidth={drawTool === "pen" ? 4 : 20}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-                opacity={drawTool === "pen" ? 1 : 0.4}
-              />
-            )}
-          </Svg>
-        )}
-        <Pressable
-          style={styles.eyeButton}
-          onPressIn={() => setShowOriginal(true)}
-          onPressOut={() => setShowOriginal(false)}
-        >
-          <EyeIcon size={20} color="#FFFFFF" />
-        </Pressable>
       </View>
 
       {/* Tab Bar */}
       <View style={styles.tabBar}>
-        <Pressable style={styles.tabButton}>
+        <Pressable style={styles.tabButton} focusable={false} accessible={false}>
           <MagicWandIcon size={22} color="#6B7280" />
         </Pressable>
         <Pressable
-          style={styles.tabButton}
+          style={[
+            styles.tabButton,
+            focusArea === "tabs" && focusedElement === "tab_adjust" && styles.tabButtonFocused
+          ]}
           onPress={() => setActiveTab("adjust")}
+          focusable={false}
+          accessible={false}
         >
-          <Text style={[styles.tabText, activeTab === "adjust" && styles.tabTextActive]}>Adjust</Text>
+          <Text style={[
+            styles.tabText,
+            activeTab === "adjust" && styles.tabTextActive,
+            focusArea === "tabs" && focusedElement === "tab_adjust" && styles.tabTextFocused
+          ]}>Adjust</Text>
         </Pressable>
         <Pressable
-          style={styles.tabButton}
+          style={[
+            styles.tabButton,
+            focusArea === "tabs" && focusedElement === "tab_filter" && styles.tabButtonFocused
+          ]}
           onPress={() => setActiveTab("filter")}
+          focusable={false}
+          accessible={false}
         >
-          <Text style={[styles.tabText, activeTab === "filter" && styles.tabTextActive]}>Filter</Text>
+          <Text style={[
+            styles.tabText,
+            activeTab === "filter" && styles.tabTextActive,
+            focusArea === "tabs" && focusedElement === "tab_filter" && styles.tabTextFocused
+          ]}>Filter</Text>
         </Pressable>
         <Pressable
-          style={styles.tabButton}
+          style={[
+            styles.tabButton,
+            focusArea === "tabs" && focusedElement === "tab_tools" && styles.tabButtonFocused
+          ]}
           onPress={() => setActiveTab("tools")}
+          focusable={false}
+          accessible={false}
         >
-          <Text style={[styles.tabText, activeTab === "tools" && styles.tabTextActive]}>Tools</Text>
+          <Text style={[
+            styles.tabText,
+            activeTab === "tools" && styles.tabTextActive,
+            focusArea === "tabs" && focusedElement === "tab_tools" && styles.tabTextFocused
+          ]}>Tools</Text>
         </Pressable>
         <Pressable
-          style={styles.tabButton}
+          style={[
+            styles.tabButton,
+            focusArea === "tabs" && focusedElement === "tab_draw" && styles.tabButtonFocused
+          ]}
           onPress={() => setActiveTab("draw")}
+          focusable={false}
+          accessible={false}
         >
-          <Text style={[styles.tabText, activeTab === "draw" && styles.tabTextActive]}>Draw</Text>
+          <Text style={[
+            styles.tabText,
+            activeTab === "draw" && styles.tabTextActive,
+            focusArea === "tabs" && focusedElement === "tab_draw" && styles.tabTextFocused
+          ]}>Draw</Text>
         </Pressable>
       </View>
 
@@ -951,8 +1447,6 @@ export default function EditorScreen() {
       <View style={styles.controlsContainer}>
         {activeTab === "adjust" && renderAdjustPanel()}
         {activeTab === "filter" && renderFilterPanel()}
-        {activeTab === "tools" && renderToolsPanel()}
-        {activeTab === "draw" && renderDrawPanel()}
       </View>
     </View>
   );
@@ -962,6 +1456,121 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#FFFFFF",
+  },
+  // Fullscreen mode styles
+  fullscreenImageContainer: {
+    flex: 1,
+    backgroundColor: "#000",
+  },
+  fullscreenImageWrapper: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+  },
+  floatingHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: scale(12),
+    paddingTop: verticalScale(35),
+    paddingBottom: scale(10),
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+  },
+  floatingBackButton: {
+    padding: scale(8),
+  },
+  floatingTitle: {
+    fontSize: fontScale(16),
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  floatingSaveButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#3B82F6",
+    paddingVertical: scale(6),
+    paddingHorizontal: scale(10),
+    borderRadius: scale(6),
+    gap: scale(4),
+  },
+  floatingSaveText: {
+    fontSize: fontScale(12),
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  floatingControls: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: scale(12),
+    paddingBottom: verticalScale(20),
+    paddingTop: scale(10),
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+  },
+  floatingToolsRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: scale(16),
+  },
+  floatingToolButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(20),
+    borderRadius: scale(8),
+    gap: scale(8),
+  },
+  floatingToolText: {
+    fontSize: fontScale(14),
+    fontWeight: "500",
+    color: "#FFFFFF",
+  },
+  floatingDrawControls: {
+    gap: scale(12),
+  },
+  floatingDrawToolsRow: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: scale(12),
+  },
+  floatingDrawToolButton: {
+    padding: scale(10),
+    borderRadius: scale(8),
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+  },
+  floatingDrawToolButtonActive: {
+    backgroundColor: "#3B82F6",
+  },
+  floatingClearButton: {
+    paddingVertical: scale(10),
+    paddingHorizontal: scale(16),
+    borderRadius: scale(8),
+    backgroundColor: "rgba(220, 38, 38, 0.8)",
+  },
+  floatingClearText: {
+    fontSize: fontScale(12),
+    fontWeight: "500",
+    color: "#FFFFFF",
+  },
+  floatingColorPalette: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: scale(8),
+  },
+  floatingColorSwatch: {
+    width: scale(28),
+    height: scale(28),
+    borderRadius: scale(4),
+  },
+  floatingColorSwatchActive: {
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
   },
   header: {
     flexDirection: "row",
@@ -974,6 +1583,15 @@ const styles = StyleSheet.create({
   },
   headerButton: {
     padding: scale(6),
+    borderRadius: scale(8),
+  },
+  headerButtonDisabled: {
+    opacity: 0.5,
+  },
+  buttonFocused: {
+    backgroundColor: "#FFD700",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
   headerCenter: {
     flexDirection: "row",
@@ -991,6 +1609,11 @@ const styles = StyleSheet.create({
   },
   saveButtonDisabled: {
     backgroundColor: "#9CA3AF",
+  },
+  saveButtonFocused: {
+    backgroundColor: "#FFD700",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
   saveButtonText: {
     fontSize: fontScale(13),
@@ -1044,6 +1667,12 @@ const styles = StyleSheet.create({
   tabButton: {
     paddingVertical: isSmallScreen ? verticalScale(4) : verticalScale(6),
     paddingHorizontal: isSmallScreen ? scale(8) : scale(12),
+    borderRadius: scale(8),
+  },
+  tabButtonFocused: {
+    backgroundColor: "#FFD700",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
   },
   tabText: {
     fontSize: isSmallScreen ? fontScale(12) : fontScale(14),
@@ -1053,6 +1682,10 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: "#1F2937",
     fontWeight: "600",
+  },
+  tabTextFocused: {
+    color: "#000000",
+    fontWeight: "700",
   },
   controlsContainer: {
     flex: 1,
@@ -1145,6 +1778,11 @@ const styles = StyleSheet.create({
   categoryChipActive: {
     backgroundColor: "#3B82F6",
   },
+  categoryChipFocused: {
+    backgroundColor: "#FFD700",
+    borderWidth: 2,
+    borderColor: "#000",
+  },
   categoryChipText: {
     fontSize: isSmallScreen ? fontScale(11) : fontScale(13),
     fontWeight: "500",
@@ -1152,6 +1790,10 @@ const styles = StyleSheet.create({
   },
   categoryChipTextActive: {
     color: "#FFFFFF",
+  },
+  categoryChipTextFocused: {
+    color: "#000000",
+    fontWeight: "700",
   },
   filterGrid: {
     flex: 1,
@@ -1178,6 +1820,10 @@ const styles = StyleSheet.create({
   filterThumbnailActive: {
     borderColor: "#3B82F6",
   },
+  filterThumbnailFocused: {
+    borderColor: "#FFD700",
+    borderWidth: 3,
+  },
   filterThumbnailImage: {
     width: "100%",
     height: "100%",
@@ -1202,6 +1848,10 @@ const styles = StyleSheet.create({
   filterNameActive: {
     color: "#3B82F6",
     fontWeight: "600",
+  },
+  filterNameFocused: {
+    color: "#000000",
+    fontWeight: "700",
   },
   // Tools panel styles
   toolsPanel: {

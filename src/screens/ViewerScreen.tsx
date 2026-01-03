@@ -34,7 +34,10 @@ import { KeyCodes } from "../keypad/keyCodes";
 
 import { dark, brand, ui, semantic } from "../theme/colors";
 import { spacing, radius } from "../theme/tokens";
-import { scale, fontScale, verticalScale } from "../theme/responsive";
+import { scale, fontScale, verticalScale, screen } from "../theme/responsive";
+
+// Detect small screen (like emulator with small resolution)
+const isSmallScreen = screen.width < 360;
 
 // Focus button options for dpad navigation
 type FocusButton = "none" | "back" | "favorite" | "more" | "prev" | "next" | "share" | "edit" | "addTo" | "delete" | "play";
@@ -202,16 +205,38 @@ export default function ViewerScreen() {
   const bottomButtons: FocusButton[] = ["share", "edit", "addTo", "delete"];
   const navButtons: FocusButton[] = ["prev", "next"];
 
+  // Track last key event time for debouncing
+  const lastKeyTime = useRef(0);
+
   // Handle dpad key events
   const handleKeyDown = useCallback((keyCode: number): boolean => {
+    // Debounce: ignore events within 100ms of each other
+    const now = Date.now();
+    if (now - lastKeyTime.current < 100) {
+      return true;
+    }
+    lastKeyTime.current = now;
+
     if (isPlayingVideo) return false;
 
-    // If no button focused yet, focus on share button first
+    // In fullscreen mode, any center/enter press toggles back to show bars
+    if (isFullscreen && (keyCode === KeyCodes.DPAD_CENTER || keyCode === KeyCodes.ENTER || keyCode === KeyCodes.NUMPAD_ENTER)) {
+      toggleFullscreen();
+      setFocusedButton("play");
+      return true;
+    }
+
+    // If no button focused yet, handle initial key press
     if (focusedButton === "none") {
+      // Enter/Center directly toggles fullscreen
+      if (keyCode === KeyCodes.DPAD_CENTER || keyCode === KeyCodes.ENTER || keyCode === KeyCodes.NUMPAD_ENTER) {
+        toggleFullscreen();
+        return true;
+      }
+      // Direction keys set initial focus
       if (keyCode === KeyCodes.DPAD_LEFT || keyCode === KeyCodes.DPAD_RIGHT ||
-          keyCode === KeyCodes.DPAD_UP || keyCode === KeyCodes.DPAD_DOWN ||
-          keyCode === KeyCodes.DPAD_CENTER || keyCode === KeyCodes.ENTER) {
-        setFocusedButton("share");
+          keyCode === KeyCodes.DPAD_UP || keyCode === KeyCodes.DPAD_DOWN) {
+        setFocusedButton("play");
         return true;
       }
     }
@@ -263,6 +288,7 @@ export default function ViewerScreen() {
 
       case KeyCodes.DPAD_CENTER:
       case KeyCodes.ENTER:
+      case KeyCodes.NUMPAD_ENTER:
         // Execute action for focused button
         switch (focusedButton) {
           case "back": navigation.goBack(); break;
@@ -270,7 +296,13 @@ export default function ViewerScreen() {
           case "more": setMenuOpen(true); break;
           case "prev": goToPrevious(); break;
           case "next": goToNext(); break;
-          case "play": if (isVideo) playVideo(); break;
+          case "play":
+            if (isVideo) {
+              playVideo();
+            } else {
+              toggleFullscreen();
+            }
+            break;
           case "share": handleShare(); break;
           case "edit": navigation.navigate("Editor", { photoId: photo?.id }); break;
           case "addTo": setAddToMenuOpen(true); break;
@@ -295,7 +327,7 @@ export default function ViewerScreen() {
         return true;
     }
     return false;
-  }, [focusedButton, currentIndex, allPhotos.length, isPlayingVideo, photo, isVideo, zoomScale, zoomIn, zoomOut, resetZoom]);
+  }, [focusedButton, currentIndex, allPhotos.length, isPlayingVideo, isFullscreen, photo, isVideo, zoomScale, zoomIn, zoomOut, resetZoom, toggleFullscreen]);
 
   // Register keypad handler
   useEffect(() => {
@@ -760,7 +792,7 @@ export default function ViewerScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor={dark.background} />
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
       {/* Header - hide when playing video or fullscreen */}
       {!isPlayingVideo && !isFullscreen && (
@@ -770,7 +802,7 @@ export default function ViewerScreen() {
             onPressIn={() => setFocusedButton("back")}
             style={[styles.headerButton, focusedButton === "back" && styles.buttonFocused]}
           >
-            <BackIcon size={scale(24)} />
+            <BackIcon size={isSmallScreen ? scale(20) : scale(24)} />
           </Pressable>
 
           <View style={styles.headerCenter}>
@@ -788,14 +820,14 @@ export default function ViewerScreen() {
               onPressIn={() => setFocusedButton("favorite")}
               style={[styles.headerButton, focusedButton === "favorite" && styles.buttonFocused]}
             >
-              <HeartIcon size={scale(24)} filled={isFavorite} color={isFavorite ? semantic.favorite : "white"} />
+              <HeartIcon size={isSmallScreen ? scale(20) : scale(24)} filled={isFavorite} color={isFavorite ? semantic.favorite : "white"} />
             </Pressable>
             <Pressable
               onPress={() => setMenuOpen(true)}
               onPressIn={() => setFocusedButton("more")}
               style={[styles.headerButton, focusedButton === "more" && styles.buttonFocused]}
             >
-              <MoreIcon size={scale(24)} />
+              <MoreIcon size={isSmallScreen ? scale(20) : scale(24)} />
             </Pressable>
           </View>
         </View>
@@ -805,7 +837,7 @@ export default function ViewerScreen() {
       {isEdited && !isPlayingVideo && !isFullscreen && (
         <View style={styles.badgeContainer}>
           <View style={styles.editedBadge}>
-            <Svg width={scale(14)} height={scale(14)} viewBox="0 0 24 24">
+            <Svg width={isSmallScreen ? scale(11) : scale(14)} height={isSmallScreen ? scale(11) : scale(14)} viewBox="0 0 24 24">
               <Path d="M12 2L4.5 20.3l.7.7L12 18l6.8 3 .7-.7z" fill="white" />
             </Svg>
             <Text style={styles.editedText}>Edited</Text>
@@ -821,7 +853,7 @@ export default function ViewerScreen() {
             onPress={goToPrevious}
             onPressIn={() => setFocusedButton("prev")}
           >
-            <ChevronIcon size={scale(32)} direction="left" />
+            <ChevronIcon size={isSmallScreen ? scale(24) : scale(32)} direction="left" />
           </Pressable>
         )}
 
@@ -877,7 +909,7 @@ export default function ViewerScreen() {
         {/* Center focus indicator for photos - hide in fullscreen */}
         {!isVideo && focusedButton === "play" && !isFullscreen && zoomScale === 1 && (
           <View style={styles.centerFocusIndicator}>
-            <Text style={styles.centerFocusText}>Use ←→ to navigate</Text>
+            <Text style={styles.centerFocusText}>Press OK for fullscreen</Text>
           </View>
         )}
 
@@ -887,7 +919,7 @@ export default function ViewerScreen() {
             onPress={goToNext}
             onPressIn={() => setFocusedButton("next")}
           >
-            <ChevronIcon size={scale(32)} direction="right" />
+            <ChevronIcon size={isSmallScreen ? scale(24) : scale(32)} direction="right" />
           </Pressable>
         )}
       </View>
@@ -953,7 +985,7 @@ export default function ViewerScreen() {
             onPress={handleShare}
             onPressIn={() => setFocusedButton("share")}
           >
-            <ShareIcon size={scale(22)} />
+            <ShareIcon size={isSmallScreen ? scale(18) : scale(22)} />
             <Text style={styles.actionText}>Share</Text>
           </Pressable>
 
@@ -962,7 +994,7 @@ export default function ViewerScreen() {
             onPress={() => navigation.navigate("Editor", { photoId: photo.id })}
             onPressIn={() => setFocusedButton("edit")}
           >
-            <EditIcon size={scale(22)} />
+            <EditIcon size={isSmallScreen ? scale(18) : scale(22)} />
             <Text style={styles.actionText}>Edit</Text>
           </Pressable>
 
@@ -971,7 +1003,7 @@ export default function ViewerScreen() {
             onPress={() => setAddToMenuOpen(true)}
             onPressIn={() => setFocusedButton("addTo")}
           >
-            <AddIcon size={scale(22)} />
+            <AddIcon size={isSmallScreen ? scale(18) : scale(22)} />
             <Text style={styles.actionText}>Add to</Text>
           </Pressable>
 
@@ -980,7 +1012,7 @@ export default function ViewerScreen() {
             onPress={handleDelete}
             onPressIn={() => setFocusedButton("delete")}
           >
-            <DeleteIcon size={scale(22)} />
+            <DeleteIcon size={isSmallScreen ? scale(18) : scale(22)} />
             <Text style={styles.actionText}>Delete</Text>
           </Pressable>
         </View>
@@ -1189,30 +1221,39 @@ const styles = StyleSheet.create({
     backgroundColor: dark.background,
   },
   header: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    paddingTop: verticalScale(40),
+    paddingHorizontal: isSmallScreen ? spacing.sm : spacing.md,
+    paddingVertical: isSmallScreen ? spacing.xs : spacing.md,
+    paddingTop: isSmallScreen ? verticalScale(28) : verticalScale(40),
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    zIndex: 10,
   },
   headerButton: {
-    padding: spacing.sm,
+    padding: isSmallScreen ? spacing.xs : spacing.sm,
     borderRadius: scale(8),
   },
   buttonFocused: {
-    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    backgroundColor: "#FFD700",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    borderRadius: scale(8),
   },
   headerCenter: {
     alignItems: "center",
   },
   headerDate: {
-    fontSize: fontScale(16),
+    fontSize: isSmallScreen ? fontScale(13) : fontScale(16),
     fontWeight: "600",
     color: dark.textPrimary,
   },
   headerCount: {
-    fontSize: fontScale(13),
+    fontSize: isSmallScreen ? fontScale(11) : fontScale(13),
     color: dark.textSecondary,
     marginTop: scale(2),
   },
@@ -1221,25 +1262,29 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   badgeContainer: {
+    position: "absolute",
+    top: isSmallScreen ? verticalScale(55) : verticalScale(80),
+    left: 0,
+    right: 0,
     alignItems: "center",
-    marginBottom: spacing.sm,
+    zIndex: 10,
   },
   editedBadge: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: ui.badgeEdited,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
+    paddingVertical: isSmallScreen ? spacing.xxs : spacing.xs,
+    paddingHorizontal: isSmallScreen ? spacing.sm : spacing.md,
     borderRadius: radius.full,
     gap: spacing.xs,
   },
   editedText: {
-    fontSize: fontScale(13),
+    fontSize: isSmallScreen ? fontScale(11) : fontScale(13),
     color: ui.badgeEditedText,
     fontWeight: "500",
   },
   imageContainer: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -1255,19 +1300,19 @@ const styles = StyleSheet.create({
   navButton: {
     position: "absolute",
     top: "50%",
-    marginTop: -scale(24),
-    width: scale(48),
-    height: scale(48),
-    borderRadius: scale(24),
+    marginTop: isSmallScreen ? -scale(18) : -scale(24),
+    width: isSmallScreen ? scale(36) : scale(48),
+    height: isSmallScreen ? scale(36) : scale(48),
+    borderRadius: isSmallScreen ? scale(18) : scale(24),
     backgroundColor: "rgba(0, 0, 0, 0.4)",
     alignItems: "center",
     justifyContent: "center",
     zIndex: 10,
   },
   navButtonFocused: {
-    backgroundColor: "rgba(255, 255, 255, 0.4)",
-    borderWidth: 2,
-    borderColor: "rgba(255, 255, 255, 0.8)",
+    backgroundColor: "#FFD700",
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
   },
   navLeft: {
     left: spacing.md,
@@ -1276,9 +1321,11 @@ const styles = StyleSheet.create({
     right: spacing.md,
   },
   playButtonFocused: {
-    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    backgroundColor: "rgba(255, 215, 0, 0.4)",
     borderRadius: scale(40),
     padding: scale(10),
+    borderWidth: 3,
+    borderColor: "#FFD700",
   },
   centerFocusIndicator: {
     position: "absolute",
@@ -1299,24 +1346,32 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   bottomBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
     flexDirection: "row",
     justifyContent: "space-around",
     alignItems: "center",
-    paddingVertical: spacing.lg,
-    paddingBottom: verticalScale(30),
-    backgroundColor: dark.backgroundSecondary,
+    paddingVertical: isSmallScreen ? spacing.sm : spacing.lg,
+    paddingBottom: isSmallScreen ? verticalScale(16) : verticalScale(30),
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    zIndex: 10,
   },
   actionButton: {
     alignItems: "center",
-    gap: spacing.xs,
-    padding: scale(8),
+    gap: isSmallScreen ? spacing.xxs : spacing.xs,
+    padding: isSmallScreen ? scale(4) : scale(8),
     borderRadius: scale(8),
   },
   actionButtonFocused: {
-    backgroundColor: "rgba(255, 255, 255, 0.25)",
+    backgroundColor: "#FFD700",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    borderRadius: scale(8),
   },
   actionText: {
-    fontSize: fontScale(12),
+    fontSize: isSmallScreen ? fontScale(10) : fontScale(12),
     color: dark.textPrimary,
   },
   menuOverlay: {
