@@ -51,8 +51,14 @@ export async function initDatabase(): Promise<void> {
         modifiedAt INTEGER,
         favorite INTEGER DEFAULT 0,
         hidden INTEGER DEFAULT 0,
+        archived INTEGER DEFAULT 0,
         trashed INTEGER DEFAULT 0
       );
+    `);
+
+    // Add archived column if it doesn't exist (migration for existing databases)
+    tx.executeSql(`
+      ALTER TABLE photos ADD COLUMN archived INTEGER DEFAULT 0;
     `);
 
     // Albums table

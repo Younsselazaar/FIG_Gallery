@@ -36,6 +36,9 @@ export type Photo = {
   /** Hidden / locked folder flag */
   hidden?: boolean;
 
+  /** Archived flag */
+  archived?: boolean;
+
   /** Trashed flag */
   trashed?: boolean;
 

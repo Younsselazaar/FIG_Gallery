@@ -17,7 +17,7 @@ import { CameraRoll } from "@react-native-camera-roll/camera-roll";
 import Header from "../components/Header";
 import SideDrawer from "../components/SideDrawer";
 import { getAllAlbums, createAlbum, deleteAlbum } from "../db/albumRepository";
-import { getAllPhotos, getFavoritePhotos } from "../db/photoRepository";
+import { getAllPhotos, getFavoritePhotos, getArchivedPhotos, getHiddenPhotos } from "../db/photoRepository";
 import { requestMediaPermission } from "../services/mediaScanner";
 import { getRecentlyViewedIds, getMostViewedIds } from "../services/viewTracking";
 
@@ -41,7 +41,7 @@ const CARD_HEIGHT = CARD_WIDTH;
 const THUMB_SIZE = scale(70);
 
 // Album types for different icons
-type AlbumType = "camera" | "screenshots" | "favorites" | "hidden" | "folder" | "videos";
+type AlbumType = "camera" | "screenshots" | "favorites" | "hidden" | "archived" | "folder" | "videos";
 
 interface DisplayAlbum {
   id: string;
@@ -119,6 +119,19 @@ function LockIcon({ size = 48, color = "rgba(255,255,255,0.5)" }: { size?: numbe
   );
 }
 
+function ArchiveIcon({ size = 48, color = "rgba(255,255,255,0.5)" }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path
+        d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z"
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+      />
+    </Svg>
+  );
+}
+
 function VideoIcon({ size = 48, color = "rgba(255,255,255,0.5)" }: { size?: number; color?: string }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24">
@@ -174,6 +187,8 @@ function getAlbumIcon(type: AlbumType, size: number = scale(40)) {
       return <HeartIcon size={size} color={color} />;
     case "hidden":
       return <LockIcon size={size} color={color} />;
+    case "archived":
+      return <ArchiveIcon size={size} color={color} />;
     case "videos":
       return <VideoIcon size={size} color={color} />;
     case "folder":
@@ -340,8 +355,10 @@ export default function AlbumsScreen() {
 
       // Get favorites count
       const favorites = await getFavoritePhotos();
+      const archived = await getArchivedPhotos();
+      const hidden = await getHiddenPhotos();
 
-      // Add system albums (Favorites, Hidden)
+      // Add system albums (Favorites, Archive, Locked)
       displayAlbums.push({
         id: "favorites",
         name: "Favorites",
@@ -354,7 +371,7 @@ export default function AlbumsScreen() {
         id: "hidden",
         name: "Hidden",
         type: "hidden",
-        count: 0,
+        count: archived.length + hidden.length,
         isDevice: false,
       });
 
@@ -377,7 +394,9 @@ export default function AlbumsScreen() {
           screenshots: 1,
           favorites: 2,
           hidden: 3,
-          folder: 4,
+          archived: 4,
+          videos: 5,
+          folder: 6,
         };
         if (order[a.type] !== order[b.type]) {
           return order[a.type] - order[b.type];
@@ -485,10 +504,10 @@ export default function AlbumsScreen() {
   const handleDeleteSelectedAlbums = () => {
     if (selectedAlbums.length === 0) return;
 
-    // Filter out system albums (favorites, hidden, device albums)
+    // Filter out system albums (favorites, archived, hidden, device albums)
     const deletableAlbums = selectedAlbums.filter((id) => {
       const album = albums.find((a) => a.id === id);
-      return album && !album.isDevice && id !== "favorites" && id !== "hidden";
+      return album && !album.isDevice && id !== "favorites" && id !== "archived" && id !== "hidden";
     });
 
     if (deletableAlbums.length === 0) {

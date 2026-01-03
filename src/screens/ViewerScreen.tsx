@@ -24,6 +24,8 @@ import {
   getAllPhotos,
   markFavorite,
   trashPhoto,
+  hidePhoto,
+  archivePhoto,
 } from "../db/photoRepository";
 import { addPhotoToAlbum } from "../db/albumRepository";
 import { trackPhotoView } from "../services/viewTracking";
@@ -190,6 +192,21 @@ export default function ViewerScreen() {
     duration?: string;
   } | null>(null);
 
+  const [exifVisible, setExifVisible] = useState(false);
+  const [exifData, setExifData] = useState<{
+    make?: string;
+    model?: string;
+    dateTime?: string;
+    exposureTime?: string;
+    fNumber?: string;
+    iso?: string;
+    focalLength?: string;
+    width?: number;
+    height?: number;
+    fileSize?: string;
+    orientation?: string;
+  } | null>(null);
+
   // Dpad focus state
   const [focusedButton, setFocusedButton] = useState<FocusButton>("none");
   const { registerHandler, unregisterHandler } = useKeypad();
@@ -218,6 +235,16 @@ export default function ViewerScreen() {
     lastKeyTime.current = now;
 
     if (isPlayingVideo) return false;
+
+    // Zoom keys work in any mode (including fullscreen)
+    if (keyCode === KeyCodes.POUND) {
+      zoomIn();
+      return true;
+    }
+    if (keyCode === KeyCodes.STAR) {
+      zoomOut();
+      return true;
+    }
 
     // In fullscreen mode, any center/enter press toggles back to show bars
     if (isFullscreen && (keyCode === KeyCodes.DPAD_CENTER || keyCode === KeyCodes.ENTER || keyCode === KeyCodes.NUMPAD_ENTER)) {
@@ -316,14 +343,6 @@ export default function ViewerScreen() {
           return true;
         }
         navigation.goBack();
-        return true;
-
-      case KeyCodes.POUND: // # key - zoom in
-        zoomIn();
-        return true;
-
-      case KeyCodes.STAR: // * key - zoom out
-        zoomOut();
         return true;
     }
     return false;
@@ -443,6 +462,120 @@ export default function ViewerScreen() {
       }
       console.error("Share error:", error);
       Alert.alert("Error", "Could not share this file");
+    }
+  };
+
+  // Archive photo (move to archive folder)
+  const handleArchive = async () => {
+    if (!photo) return;
+    Alert.alert(
+      "Archive Photo",
+      "Move this photo to archive? It will be hidden from your main gallery.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Archive",
+          onPress: async () => {
+            await archivePhoto(photo.id, true);
+            Alert.alert("Archived", "Photo moved to archive");
+            navigation.goBack();
+          },
+        },
+      ]
+    );
+  };
+
+  // Move to locked folder
+  const handleMoveToLocked = async () => {
+    if (!photo) return;
+    Alert.alert(
+      "Move to Locked Folder",
+      "Move this photo to your locked folder? It will require authentication to view.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Move",
+          onPress: async () => {
+            await hidePhoto(photo.id, true);
+            Alert.alert("Moved", "Photo moved to locked folder");
+            navigation.goBack();
+          },
+        },
+      ]
+    );
+  };
+
+  // Unlock photo (remove from locked folder)
+  const handleUnlock = async () => {
+    if (!photo) return;
+    await hidePhoto(photo.id, false);
+    setPhoto({ ...photo, hidden: 0 });
+    Alert.alert("Unlocked", "Photo restored to gallery");
+    navigation.goBack();
+  };
+
+  // Unarchive photo (remove from archive)
+  const handleUnarchive = async () => {
+    if (!photo) return;
+    await archivePhoto(photo.id, false);
+    setPhoto({ ...photo, archived: 0 });
+    Alert.alert("Unarchived", "Photo restored to gallery");
+    navigation.goBack();
+  };
+
+  // Show EXIF data
+  const handleShowExif = async () => {
+    if (!photo) return;
+    try {
+      // Get file stats
+      let filePath = photo.uri;
+
+      // Handle content:// URIs
+      if (filePath.startsWith("content://")) {
+        // Try to get basic info from the URI
+        const stats = await RNFS.stat(filePath).catch(() => null);
+
+        // Get image dimensions
+        const dimensions = await new Promise<{width: number, height: number}>((resolve) => {
+          Image.getSize(
+            photo.uri,
+            (width, height) => resolve({ width, height }),
+            () => resolve({ width: 0, height: 0 })
+          );
+        });
+
+        setExifData({
+          width: dimensions.width,
+          height: dimensions.height,
+          fileSize: stats ? `${(stats.size / 1024 / 1024).toFixed(2)} MB` : "Unknown",
+          dateTime: photo.createdAt ? new Date(photo.createdAt).toLocaleString() : "Unknown",
+          orientation: dimensions.width > dimensions.height ? "Landscape" : "Portrait",
+        });
+      } else {
+        // File path - get more details
+        const stats = await RNFS.stat(filePath);
+
+        const dimensions = await new Promise<{width: number, height: number}>((resolve) => {
+          Image.getSize(
+            photo.uri,
+            (width, height) => resolve({ width, height }),
+            () => resolve({ width: 0, height: 0 })
+          );
+        });
+
+        setExifData({
+          width: dimensions.width,
+          height: dimensions.height,
+          fileSize: `${(stats.size / 1024 / 1024).toFixed(2)} MB`,
+          dateTime: new Date(stats.mtime).toLocaleString(),
+          orientation: dimensions.width > dimensions.height ? "Landscape" : "Portrait",
+        });
+      }
+
+      setExifVisible(true);
+    } catch (error) {
+      console.error("Error loading EXIF:", error);
+      Alert.alert("Error", "Could not load image information");
     }
   };
 
@@ -952,7 +1085,7 @@ export default function ViewerScreen() {
               style={styles.addToMenuItem}
               onPress={() => {
                 setAddToMenuOpen(false);
-                Alert.alert("Archive", "Photo archived");
+                handleArchive();
               }}
             >
               <Svg width={scale(22)} height={scale(22)} viewBox="0 0 24 24">
@@ -965,7 +1098,7 @@ export default function ViewerScreen() {
               style={styles.addToMenuItem}
               onPress={() => {
                 setAddToMenuOpen(false);
-                Alert.alert("Locked folder", "Photo moved to locked folder");
+                handleMoveToLocked();
               }}
             >
               <Svg width={scale(22)} height={scale(22)} viewBox="0 0 24 24">
@@ -1040,20 +1173,38 @@ export default function ViewerScreen() {
               </Svg>
               <Text style={styles.menuItemText}>Add to album</Text>
             </Pressable>
-            {/* Archive */}
-            <Pressable style={styles.menuItem}>
-              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
-                <Path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z" fill="#1A1A1A" />
-              </Svg>
-              <Text style={styles.menuItemText}>Archive</Text>
-            </Pressable>
-            {/* Locked folder */}
-            <Pressable style={styles.menuItem}>
-              <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
-                <Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" fill="#1A1A1A" />
-              </Svg>
-              <Text style={styles.menuItemText}>Locked folder</Text>
-            </Pressable>
+            {/* Archive / Unarchive */}
+            {photo.archived === 1 ? (
+              <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); handleUnarchive(); }}>
+                <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                  <Path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z" fill="#1A1A1A" />
+                </Svg>
+                <Text style={styles.menuItemText}>Unarchive</Text>
+              </Pressable>
+            ) : (
+              <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); handleArchive(); }}>
+                <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                  <Path d="M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z" fill="#1A1A1A" />
+                </Svg>
+                <Text style={styles.menuItemText}>Archive</Text>
+              </Pressable>
+            )}
+            {/* Locked folder / Unlock */}
+            {photo.hidden === 1 ? (
+              <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); handleUnlock(); }}>
+                <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                  <Path d="M12 17c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm6-9h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h1.9c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10z" fill="#1A1A1A" />
+                </Svg>
+                <Text style={styles.menuItemText}>Unlock</Text>
+              </Pressable>
+            ) : (
+              <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); handleMoveToLocked(); }}>
+                <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
+                  <Path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z" fill="#1A1A1A" />
+                </Svg>
+                <Text style={styles.menuItemText}>Lock</Text>
+              </Pressable>
+            )}
             {/* Revert to original */}
             <Pressable style={styles.menuItem}>
               <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
@@ -1069,7 +1220,7 @@ export default function ViewerScreen() {
               <Text style={styles.menuItemText}>Details</Text>
             </Pressable>
             {/* Show EXIF */}
-            <Pressable style={styles.menuItem}>
+            <Pressable style={styles.menuItem} onPress={() => { setMenuOpen(false); handleShowExif(); }}>
               <Svg width={scale(20)} height={scale(20)} viewBox="0 0 24 24">
                 <Path d="M9 3L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2h-3.17L15 3H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.65 0-3 1.35-3 3s1.35 3 3 3 3-1.35 3-3-1.35-3-3-3z" fill="#1A1A1A" />
               </Svg>
@@ -1205,6 +1356,106 @@ export default function ViewerScreen() {
                     <Text style={styles.detailLabel}>Path</Text>
                     <Text style={styles.detailValuePath} numberOfLines={4}>{fileDetails.path}</Text>
                   </View>
+                </>
+              )}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* EXIF Modal */}
+      <Modal
+        visible={exifVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setExifVisible(false)}
+      >
+        <Pressable style={styles.detailsOverlay} onPress={() => setExifVisible(false)}>
+          <Pressable style={styles.detailsModal} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.detailsHeader}>
+              <Text style={styles.detailsTitle}>Image Information</Text>
+              <Pressable onPress={() => setExifVisible(false)} style={styles.detailsCloseBtn}>
+                <Svg width={scale(24)} height={scale(24)} viewBox="0 0 24 24">
+                  <Path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="#6B7280" />
+                </Svg>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.detailsContent}>
+              {exifData && (
+                <>
+                  {exifData.width && exifData.height && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Dimensions</Text>
+                      <Text style={styles.detailValue}>{exifData.width} x {exifData.height}</Text>
+                    </View>
+                  )}
+
+                  {exifData.fileSize && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>File Size</Text>
+                      <Text style={styles.detailValue}>{exifData.fileSize}</Text>
+                    </View>
+                  )}
+
+                  {exifData.orientation && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Orientation</Text>
+                      <Text style={styles.detailValue}>{exifData.orientation}</Text>
+                    </View>
+                  )}
+
+                  {exifData.dateTime && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Date Taken</Text>
+                      <Text style={styles.detailValue}>{exifData.dateTime}</Text>
+                    </View>
+                  )}
+
+                  {exifData.make && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Camera Make</Text>
+                      <Text style={styles.detailValue}>{exifData.make}</Text>
+                    </View>
+                  )}
+
+                  {exifData.model && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Camera Model</Text>
+                      <Text style={styles.detailValue}>{exifData.model}</Text>
+                    </View>
+                  )}
+
+                  {exifData.exposureTime && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Exposure</Text>
+                      <Text style={styles.detailValue}>{exifData.exposureTime}</Text>
+                    </View>
+                  )}
+
+                  {exifData.fNumber && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>Aperture</Text>
+                      <Text style={styles.detailValue}>f/{exifData.fNumber}</Text>
+                    </View>
+                  )}
+
+                  {exifData.iso && (
+                    <View style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>ISO</Text>
+                      <Text style={styles.detailValue}>{exifData.iso}</Text>
+                    </View>
+                  )}
+
+                  {exifData.focalLength && (
+                    <View style={[styles.detailRow, styles.detailRowLast]}>
+                      <Text style={styles.detailLabel}>Focal Length</Text>
+                      <Text style={styles.detailValue}>{exifData.focalLength}mm</Text>
+                    </View>
+                  )}
+
+                  {!exifData.focalLength && (
+                    <View style={styles.detailRowLast} />
+                  )}
                 </>
               )}
             </ScrollView>

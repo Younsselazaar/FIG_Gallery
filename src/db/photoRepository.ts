@@ -17,7 +17,7 @@ export async function getAllPhotos(): Promise<Photo[]> {
   const db = await getDB();
   const results = await db.executeSql(
     `SELECT * FROM photos
-     WHERE trashed = 0 AND hidden = 0
+     WHERE trashed = 0 AND hidden = 0 AND (archived = 0 OR archived IS NULL)
      ORDER BY createdAt DESC`
   );
 
@@ -48,8 +48,8 @@ export async function insertPhoto(photo: Photo): Promise<void> {
   const db = await getDB();
   await db.executeSql(
     `INSERT OR REPLACE INTO photos
-      (id, uri, createdAt, modifiedAt, favorite, hidden, trashed)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      (id, uri, createdAt, modifiedAt, favorite, hidden, archived, trashed)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       photo.id,
       photo.uri,
@@ -57,6 +57,7 @@ export async function insertPhoto(photo: Photo): Promise<void> {
       photo.modifiedAt,
       photo.favorite ? 1 : 0,
       photo.hidden ? 1 : 0,
+      photo.archived ? 1 : 0,
       photo.trashed ? 1 : 0,
     ]
   );
@@ -81,6 +82,17 @@ export async function hidePhoto(
   await db.executeSql(
     `UPDATE photos SET hidden = ? WHERE id = ?`,
     [hidden ? 1 : 0, photoId]
+  );
+}
+
+export async function archivePhoto(
+  photoId: string,
+  archived: boolean
+): Promise<void> {
+  const db = await getDB();
+  await db.executeSql(
+    `UPDATE photos SET archived = ? WHERE id = ?`,
+    [archived ? 1 : 0, photoId]
   );
 }
 
@@ -129,6 +141,42 @@ export async function getTrashedPhotos(): Promise<Photo[]> {
   const results = await db.executeSql(
     `SELECT * FROM photos
      WHERE trashed = 1
+     ORDER BY modifiedAt DESC`
+  );
+
+  const rows = results[0].rows;
+  const photos: Photo[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    photos.push(rows.item(i));
+  }
+
+  return photos;
+}
+
+export async function getHiddenPhotos(): Promise<Photo[]> {
+  const db = await getDB();
+  const results = await db.executeSql(
+    `SELECT * FROM photos
+     WHERE hidden = 1 AND (archived = 0 OR archived IS NULL) AND trashed = 0
+     ORDER BY modifiedAt DESC`
+  );
+
+  const rows = results[0].rows;
+  const photos: Photo[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    photos.push(rows.item(i));
+  }
+
+  return photos;
+}
+
+export async function getArchivedPhotos(): Promise<Photo[]> {
+  const db = await getDB();
+  const results = await db.executeSql(
+    `SELECT * FROM photos
+     WHERE archived = 1 AND (hidden = 0 OR hidden IS NULL) AND trashed = 0
      ORDER BY modifiedAt DESC`
   );
 
